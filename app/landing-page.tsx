@@ -24,7 +24,7 @@ import { LandingNav } from './landing-nav'
 import { HowItWorks } from './how-it-works'
 import { CodeSamples } from './code-samples'
 import { LandingFooter } from './landing-footer'
-import { WaitlistForm } from '@/components/waitlist-form'
+import Link from 'next/link'
 
 const fadeInUp = {
   initial: { opacity: 0, y: 30 },
@@ -45,7 +45,7 @@ export function LandingPage() {
       <LandingNav />
 
       {/* ── Hero ────────────────────────────────────────────────── */}
-      <section id="waitlist" className="relative min-h-screen flex items-center justify-center overflow-hidden">
+      <section id="hero" className="relative min-h-screen flex items-center justify-center overflow-hidden">
         {/* Background grid + glow */}
         <div className="absolute inset-0 overflow-hidden">
           <div
@@ -76,7 +76,7 @@ export function LandingPage() {
             style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)', background: 'var(--color-primary)' + '15' }}
           >
             <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--color-primary)' }} />
-            Coming Soon · Join the waitlist
+            Now Available
           </motion.div>
 
           <motion.h1
@@ -107,10 +107,22 @@ export function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.3 }}
           >
-            <WaitlistForm />
-            <p className="text-muted text-sm mt-4" style={{ color: 'var(--color-muted)' }}>
-              No spam. Early access to the private beta.
-            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link
+                href="https://uniplex.ai/signup"
+                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg"
+                style={{ background: 'var(--color-primary)', color: 'var(--color-background)' }}
+              >
+                Get Started Free
+              </Link>
+              <Link
+                href="https://uniplex.ai/login"
+                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg border"
+                style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
+              >
+                Sign In
+              </Link>
+            </div>
           </motion.div>
 
           {/* Trust badges */}
@@ -432,13 +444,27 @@ export function LandingPage() {
               Ready to Build with Trust?
             </h2>
             <p className="text-lg max-w-xl mx-auto mb-4" style={{ color: 'var(--color-muted)' }}>
-              Be among the first to run agents with verifiable identity and cryptographic control. Join the
-              waitlist for early access.
+              Start issuing credentials and protecting resources in minutes. Free to start for individual developers.
             </p>
             <p className="text-sm mb-10" style={{ color: 'var(--color-muted)', opacity: 0.6 }}>
               Open protocol. No vendor lock-in.
             </p>
-            <WaitlistForm />
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link
+                href="https://uniplex.ai/signup"
+                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg"
+                style={{ background: 'var(--color-primary)', color: 'var(--color-background)' }}
+              >
+                Get Started Free
+              </Link>
+              <Link
+                href="https://uniplex.ai/login"
+                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg border"
+                style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
+              >
+                Sign In
+              </Link>
+            </div>
           </motion.div>
         </div>
       </section>

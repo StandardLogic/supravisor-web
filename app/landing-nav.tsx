@@ -42,13 +42,6 @@ export function LandingNav() {
     if (el) el.scrollIntoView({ behavior: 'smooth' })
   }
 
-  function scrollToWaitlist(e: React.MouseEvent) {
-    e.preventDefault()
-    setMobileOpen(false)
-    const el = document.querySelector('#waitlist')
-    if (el) el.scrollIntoView({ behavior: 'smooth' })
-  }
-
   return (
     <>
       <nav
@@ -82,12 +75,13 @@ export function LandingNav() {
           {/* Right — desktop */}
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
-            <button
-              onClick={scrollToWaitlist}
-              className="text-xs font-mono bg-primary hover:bg-primary-hover text-background font-medium py-1.5 px-4 rounded-lg transition-colors cursor-pointer"
+            <Link
+              href="https://uniplex.ai/signup"
+              className="text-xs font-mono text-background font-medium py-1.5 px-4 rounded-lg transition-colors"
+              style={{ background: 'var(--color-primary)' }}
             >
-              Get Early Access
-            </button>
+              Get Started Free
+            </Link>
           </div>
 
           {/* Mobile hamburger */}
@@ -143,12 +137,14 @@ export function LandingNav() {
               <span className="text-base font-mono text-muted">Theme</span>
               <ThemeToggle />
             </div>
-            <button
-              onClick={scrollToWaitlist}
-              className="block w-full text-center font-mono bg-primary hover:bg-primary-hover text-background font-medium py-3 px-4 rounded-lg transition-colors cursor-pointer"
+            <Link
+              href="https://uniplex.ai/signup"
+              onClick={() => setMobileOpen(false)}
+              className="block w-full text-center font-mono text-background font-medium py-3 px-4 rounded-lg transition-colors"
+              style={{ background: 'var(--color-primary)' }}
             >
-              Get Early Access
-            </button>
+              Get Started Free
+            </Link>
           </div>
         </div>
       </div>
