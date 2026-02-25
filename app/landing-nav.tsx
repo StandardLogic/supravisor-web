@@ -8,6 +8,7 @@ import { SupravisorLogo } from '@/components/logo'
 
 const navLinks = [
   { href: '#how-it-works', label: 'How It Works' },
+  { href: 'https://uniplex.ai/docs', label: 'Developers' },
   { href: '#features', label: 'Features' },
   { href: '#commerce', label: 'Commerce' },
 ]
@@ -75,6 +76,13 @@ export function LandingNav() {
           {/* Right — desktop */}
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
+            <Link
+              href="https://uniplex.ai/login"
+              className="text-sm font-mono transition-colors"
+              style={{ color: 'var(--color-muted)' }}
+            >
+              Sign In
+            </Link>
             <Link
               href="https://uniplex.ai/signup"
               className="text-xs font-mono text-background font-medium py-1.5 px-4 rounded-lg transition-colors"
