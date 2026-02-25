@@ -37,6 +37,10 @@ export function LandingNav() {
   }, [mobileOpen])
 
   function handleAnchorClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    if (href.startsWith('http')) {
+      setMobileOpen(false)
+      return // let the browser handle external links normally
+    }
     e.preventDefault()
     setMobileOpen(false)
     const el = document.querySelector(href)
@@ -85,8 +89,7 @@ export function LandingNav() {
             </Link>
             <Link
               href="https://uniplex.ai/signup"
-              className="text-xs font-mono text-background font-medium py-1.5 px-4 rounded-lg transition-colors"
-              style={{ background: 'var(--color-primary)' }}
+              className="text-xs font-mono bg-primary hover:bg-primary-hover text-background font-medium py-1.5 px-4 rounded-lg transition-colors"
             >
               Get Started Free
             </Link>

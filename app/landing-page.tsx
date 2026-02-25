@@ -55,7 +55,7 @@ export function LandingPage() {
               backgroundImage:
                 'linear-gradient(var(--color-border) 1px, transparent 1px), linear-gradient(90deg, var(--color-border) 1px, transparent 1px)',
               backgroundSize: '64px 64px',
-              opacity: 0.3,
+              opacity: 0.03,
             }}
           />
           <div
@@ -450,15 +450,13 @@ export function LandingPage() {
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
                 href="https://uniplex.ai/signup"
-                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg"
-                style={{ background: 'var(--color-primary)', color: 'var(--color-background)' }}
+                className="w-full sm:w-auto font-mono bg-primary hover:bg-primary-hover text-background font-medium py-3 px-8 rounded-lg transition-colors text-lg"
               >
                 Get Started Free
               </Link>
               <Link
                 href="https://uniplex.ai/login"
-                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg border"
-                style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
+                className="w-full sm:w-auto font-mono border border-border hover:border-muted text-foreground font-medium py-3 px-8 rounded-lg transition-colors text-lg"
               >
                 Sign In
               </Link>
