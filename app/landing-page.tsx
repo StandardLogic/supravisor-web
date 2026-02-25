@@ -68,17 +68,6 @@ export function LandingPage() {
         </div>
 
         <div className="relative max-w-4xl mx-auto px-6 text-center pt-24 pb-16">
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-full border mb-8"
-            style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)', background: 'var(--color-primary)' + '15' }}
-          >
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: 'var(--color-primary)' }} />
-            Now Available
-          </motion.div>
-
           <motion.h1
             className="text-5xl md:text-7xl font-mono font-bold tracking-tight mb-6"
             style={{ color: 'var(--color-foreground)' }}
@@ -86,8 +75,8 @@ export function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6 }}
           >
-            Run AI Agents{' '}
-            <span style={{ color: 'var(--color-primary)' }}>Without Fear</span>
+            The Trust Layer for the{' '}
+            <span style={{ color: 'var(--color-primary)' }}>Agent Economy</span>
           </motion.h1>
 
           <motion.p
@@ -97,37 +86,44 @@ export function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.15 }}
           >
-            Supravisor gives your agents verifiable identity, enforces what they can do, and creates a
-            cryptographic record of everything. Control without compromise.
+            Give your agents verifiable identity. Protect your resources. Enable agent-to-agent trust and transactions. Everything cryptographically signed.
           </motion.p>
 
-          {/* Waitlist form */}
           <motion.div
+            className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.3 }}
           >
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link
-                href="https://uniplex.ai/signup"
-                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg"
-                style={{ background: 'var(--color-primary)', color: 'var(--color-background)' }}
-              >
-                Get Started Free
-              </Link>
-              <Link
-                href="https://uniplex.ai/login"
-                className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg border"
-                style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
-              >
-                Sign In
-              </Link>
-            </div>
+            <Link
+              href="https://uniplex.ai/signup"
+              className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg"
+              style={{ background: 'var(--color-primary)', color: 'var(--color-background)' }}
+            >
+              Get Started Free
+            </Link>
+            <Link
+              href="https://uniplex.ai/docs"
+              className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg border"
+              style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
+            >
+              Read the Docs
+            </Link>
           </motion.div>
+
+          <motion.p
+            className="text-sm mb-10"
+            style={{ color: 'var(--color-muted)' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.6, delay: 0.45 }}
+          >
+            Free to start. No credit card required.
+          </motion.p>
 
           {/* Trust badges */}
           <motion.div
-            className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-sm mt-10"
+            className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-sm mt-4"
             style={{ color: 'var(--color-muted)', opacity: 0.7 }}
             initial={{ opacity: 0 }}
             animate={{ opacity: 0.7 }}
@@ -137,6 +133,7 @@ export function LandingPage() {
               { icon: Globe, label: 'Open Protocol' },
               { icon: Lock, label: 'Ed25519 Signed' },
               { icon: Shield, label: 'MCP Native' },
+              { icon: Code, label: 'TypeScript & Python SDKs' },
             ].map((badge, i) => (
               <span key={badge.label} className="flex items-center gap-1.5">
                 {i > 0 && <span className="mr-1" style={{ color: 'var(--color-border)' }}>·</span>}
