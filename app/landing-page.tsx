@@ -81,7 +81,7 @@ export function LandingPage() {
           </motion.h1>
 
           <motion.p
-            className="text-lg md:text-xl max-w-2xl mx-auto mb-10 leading-relaxed"
+            className="text-lg md:text-xl font-sans max-w-2xl mx-auto mb-10 leading-relaxed"
             style={{ color: 'var(--color-muted)' }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
