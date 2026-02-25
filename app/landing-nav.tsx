@@ -62,7 +62,7 @@ export function LandingNav() {
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="shrink-0">
-            <SupravisorLogo className="h-[51px]" />
+            <SupravisorLogo className="h-[36px]" />
           </Link>
 
           {/* Center links — desktop */}
@@ -118,7 +118,7 @@ export function LandingNav() {
         style={{ borderColor: 'var(--color-border)' }}
       >
         <div className="flex items-center justify-between px-6 py-5">
-          <SupravisorLogo className="h-[51px]" />
+          <SupravisorLogo className="h-[36px]" />
           <button
             onClick={() => setMobileOpen(false)}
             className="p-1 rounded-lg text-muted hover:text-foreground transition-colors"
