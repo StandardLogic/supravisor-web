@@ -1,0 +1,225 @@
+# Issuers
+
+An issuer is your organization's DMV.
+
+A real DMV issues driver's licenses — it vouches for the identity of every license holder and defines what they're authorized to do. When a gate sees a passport, the first question it asks is: "Who issued this?" If it's your issuer, and your issuer is on the trusted list, the gate proceeds. If not, the request is rejected before anything else is checked.
+
+When you create an issuer, you become that authority. You decide which agents get credentials. You decide what they're allowed to claim. And if something goes wrong, you can revoke the issuer and invalidate every credential it ever signed — instantly.
+
+---
+
+## Issuer ID Format
+
+Every issuer has a globally unique ID:
+
+```
+issuer:yourdomain.ai
+```
+
+For personal or development use:
+```
+issuer:personal.local
+issuer:dev.yourname
+```
+
+For organizations:
+```
+issuer:acmecorp.ai
+issuer:engineering.acmecorp.ai
+```
+
+The format is deliberately human-readable. When you look at an attestation, you can immediately see which authority signed the credential.
+
+---
+
+## One Issuer, Many Agents
+
+One issuer signs many passports:
+
+```
+issuer:acmecorp.ai
+  ├── passport: research-agent-001
+  ├── passport: email-agent-prod
+  ├── passport: customer-support-bot
+  └── passport: data-pipeline-worker
+```
+
+Gates are configured to trust specific issuers. You might have a production gate that only accepts passports from `issuer:acmecorp.ai`, and a dev gate that also accepts `issuer:dev.acmecorp.ai`. Separate issuers give you isolation — if one is compromised, revoking it doesn't affect the others.
+
+---
+
+## Trust Tiers
+
+<CardGroup cols={2}>
+  <Card title="Self (L1)" icon="user">
+    **Development and prototyping.** You generate the keypair yourself, no verification required. Use for local development, quick experiments, and internal tools that don't need external trust.
+  </Card>
+  <Card title="Internal (L2)" icon="building">
+    **Team and production deployments.** Issued through your Supravisor account. Gates can verify the passport was signed by a specific, known issuer. Use for any agent facing external services or handling sensitive data.
+  </Card>
+  <Card title="Verified (coming soon)" icon="badge-check">
+    **Third-party verified identity.** Your domain ownership verified via DNS or HTTPS challenge. Other organizations can trust your issuer by name. Enables cross-organization agent trust.
+  </Card>
+  <Card title="Certified (coming soon)" icon="certificate">
+    **Audited and certified issuers.** For regulated industries. Full KYB verification, compliance attestations, and insurance-backed credentials.
+  </Card>
+</CardGroup>
+
+---
+
+## How Keys Work
+
+<Note>
+  Supravisor never sees your issuer's private key. The Ed25519 keypair is generated entirely in your browser using the Web Crypto API. The private key is shown to you once, then gone from Supravisor's systems permanently.
+</Note>
+
+When you create an issuer:
+
+1. Your browser generates an Ed25519 keypair locally
+2. The **public key** is sent to Supravisor and stored
+3. The **private key** is displayed in the UI for you to copy
+4. Supravisor stores only the public key — it cannot sign passports on your behalf
+
+This means passport forgery is impossible even if Supravisor's servers were compromised. Only whoever holds the private key can create valid passports.
+
+---
+
+## Creating an Issuer
+
+<Steps>
+  <Step title="Open Issuers">
+    In the Supravisor dashboard, click **Issuers** in the left sidebar.
+  </Step>
+  <Step title="Click New Issuer">
+    Click **+ New Issuer** in the top right.
+  </Step>
+  <Step title="Fill in the details">
+    - **Name:** Human-readable label (e.g., "Production Agents")
+    - **Issuer ID:** The `issuer:yourdomain.ai` format identifier
+    - **Description:** Optional notes about what this issuer is for
+  </Step>
+  <Step title="Generate the keypair">
+    Click **Generate Keys**. Your browser creates an Ed25519 keypair. The public key is automatically uploaded. The private key appears in a highlighted box.
+  </Step>
+  <Step title="Save the private key">
+    Copy it immediately and store it in a secrets manager — 1Password, Vault, AWS Secrets Manager, or similar. Click **I've saved my key** to confirm.
+
+    <Warning>
+      This is the only time the private key is shown. If you close this window without saving it, you cannot recover it. You'll need to create a new issuer.
+    </Warning>
+  </Step>
+</Steps>
+
+---
+
+## When to Use Multiple Issuers
+
+Separate issuers give you isolation, revocability, and auditability at the group level.
+
+| Scenario | Recommended Structure |
+|----------|----------------------|
+| Dev vs. production | `issuer:dev.company.ai` + `issuer:company.ai` |
+| Multiple teams | `issuer:eng.company.ai` + `issuer:ops.company.ai` |
+| Security incident | Revoke the compromised issuer, reissue from a new one |
+| Client isolation | `issuer:client-a.company.ai` per client |
+| Vendor/partner agents | Separate issuer with restricted trust scope |
+
+---
+
+## Managing Issuers via API
+
+### Listing Issuers
+
+```bash
+curl https://uniplex.ai/api/issuers \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+```json
+{
+  "issuers": [
+    {
+      "issuer_id": "issuer:acmecorp.ai",
+      "name": "Production Agents",
+      "trust_tier": "internal",
+      "passport_count": 12,
+      "created_at": "2026-01-15T00:00:00Z",
+      "status": "active"
+    }
+  ]
+}
+```
+
+### Revoking an Issuer
+
+Revoking an issuer immediately invalidates **every passport it ever signed**. Gates will deny passports from a revoked issuer, even unexpired ones.
+
+```bash
+curl -X DELETE https://uniplex.ai/api/issuers/issuer:acmecorp.ai \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+<Warning>
+  Issuer revocation is immediate and irreversible. Every agent using passports from this issuer loses access instantly. Have a migration plan before revoking production issuers.
+</Warning>
+
+---
+
+## Verifying Issuer Trust in Code
+
+<CodeGroup>
+```python Python
+from uniplex import UniplexClient, Gate, TrustProfile
+
+client = UniplexClient(api_key="uni_xxxx")
+issuer = client.issuers.get("issuer:acmecorp.ai")
+
+print(f"Trust tier: {issuer.trust_tier}")        # "internal"
+print(f"Status: {issuer.status}")                # "active"
+print(f"Passports issued: {issuer.passport_count}")  # 12
+
+# Verify a passport comes from a trusted issuer
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:acmecorp.ai"]
+)
+
+result = gate.verify(passport_token)
+print(f"Issuer trusted: {result.issuer_trusted}")  # True
+print(f"Issuer ID: {result.issuer_id}")            # "issuer:acmecorp.ai"
+```
+
+```typescript TypeScript
+import { UniplexClient, Gate, TrustProfile } from 'uniplex';
+
+const client = new UniplexClient({ apiKey: 'uni_xxxx' });
+const issuer = await client.issuers.get('issuer:acmecorp.ai');
+
+console.log(`Trust tier: ${issuer.trustTier}`);       // "internal"
+console.log(`Status: ${issuer.status}`);               // "active"
+console.log(`Passports issued: ${issuer.passportCount}`); // 12
+
+// Verify a passport comes from a trusted issuer
+const gate = new Gate({
+  profile: TrustProfile.L2,
+  trustedIssuers: ['issuer:acmecorp.ai'],
+});
+
+const result = await gate.verify(passportToken);
+console.log(`Issuer trusted: ${result.issuerTrusted}`); // true
+console.log(`Issuer ID: ${result.issuerId}`);           // "issuer:acmecorp.ai"
+```
+</CodeGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Issue a Passport" href="/docs/concepts/passports" icon="id-card">
+    Once you have an issuer, create credentials for your agents.
+  </Card>
+  <Card title="Issuers API" href="/docs/api-reference/issuers" icon="code">
+    Full REST API reference for programmatic issuer management.
+  </Card>
+</CardGroup>

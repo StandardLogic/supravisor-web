@@ -1,0 +1,260 @@
+# Authorize API
+
+Two authorization surfaces: **gate check** (passport verification + attestation) and **CEL enforce** (constraint evaluation with rate/cost tracking). Also includes **dry-run** for testing policy changes.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## Gate Check
+
+Verify a passport against a gate and record a signed attestation.
+
+```
+POST /api/gates/[gate_id]/check
+```
+
+**Required scope:** `gates:read`
+
+**Request:**
+
+```json
+{
+  "passport_json": {
+    "payload": {
+      "passport_id": "uni_abc123",
+      "agent_id": "travel-agent-01",
+      "issuer_id": "issuer:mycompany.ai",
+      "permissions": ["flights:search", "flights:book"],
+      "public_key": "MCowBQYDK2VwAyEA...",
+      "issued_at": "2026-02-01T00:00:00Z",
+      "expires_at": "2026-04-01T00:00:00Z"
+    },
+    "signature": "base64_ed25519_signature..."
+  },
+  "action": "flights:search",
+  "target": "JFK-LAX",
+  "pop_token": null,
+  "dry_run": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `passport_json` | `object` | ✅ | Full passport `{ payload, signature }` |
+| `action` | `string` | ✅ | The action to check |
+| `target` | `string` | ❌ | Resource target |
+| `pop_token` | `object` | L3 only | Proof of Possession — required for L3 gates |
+| `dry_run` | `boolean` | ❌ | If true, all checks run but saved with `is_dry_run=true` |
+
+**Response (allow):**
+
+```json
+{
+  "decision": "allow",
+  "reason_code": null,
+  "attestation": {
+    "attestation_id": "att_xyz789",
+    "attestation_json": {
+      "gate_id": "gate_def456",
+      "passport_id": "uni_abc123",
+      "action": "flights:search",
+      "decision": "allow",
+      "checked_at": "2026-02-24T15:30:00Z"
+    },
+    "signature": "base64_ed25519_gate_signature...",
+    "attester_public_key": "base64_gate_public_key..."
+  }
+}
+```
+
+**Response (deny):**
+
+```json
+{
+  "decision": "deny",
+  "reason_code": "PERMISSION_DENIED",
+  "attestation": { ... }
+}
+```
+
+### Reason Codes
+
+| Code | Meaning |
+|------|---------|
+| `PERMISSION_DENIED` | Action not in passport's permissions |
+| `EXPIRED_PASSPORT` | Passport past `expires_at` |
+| `REVOKED_PASSPORT` | Passport manually revoked |
+| `INVALID_SIGNATURE` | Ed25519 signature verification failed |
+| `ISSUER_NOT_TRUSTED` | Issuer not in gate's trusted list |
+| `SELF_ISSUED_NOT_ALLOWED` | Self-issued rejected by L2/L3 gate |
+| `POP_REQUIRED` | L3 gate needs PoP, not provided |
+| `POP_INVALID` | PoP verification failed |
+
+### Self-Contained Attestation Verification
+
+The attestation is verifiable by anyone without contacting any server:
+
+```typescript
+import { canonicalize } from 'json-canonicalize';
+import { verify } from '@noble/ed25519';
+
+const canonical = canonicalize(attestation.attestation_json);
+const valid = await verify(
+  base64ToBytes(attestation.signature),
+  new TextEncoder().encode(canonical),
+  base64ToBytes(attestation.attester_public_key)
+);
+```
+
+---
+
+## CEL Enforce
+
+Run all 26 constraint evaluators for a passport + action. Tracks rate/cost state.
+
+```
+POST /api/enforce
+```
+
+**Required scope:** `enforce:write`
+
+**Request:**
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "action": "flights:book",
+  "target": "JFK-LAX",
+  "cost_cents": 50000,
+  "metadata": { "booking_ref": "BK123" }
+}
+```
+
+**Response:**
+
+```json
+{
+  "decision": "PERMIT",
+  "reason": "All constraints satisfied",
+  "enforcement_attestation_id": "enf_pqr012",
+  "evaluator_results": [
+    {
+      "evaluator": "core:scope:action_allowlist",
+      "decision": "PERMIT",
+      "sequence": 20
+    },
+    {
+      "evaluator": "core:rate:max_per_minute",
+      "decision": "PERMIT",
+      "data": { "current": 2, "limit": 10, "window": "minute" },
+      "sequence": 30
+    },
+    {
+      "evaluator": "core:cost:max_per_action",
+      "decision": "PERMIT",
+      "data": { "amount_cents": 50000, "limit_cents": 100000 },
+      "sequence": 40
+    }
+  ]
+}
+```
+
+### CEL Decisions
+
+| Decision | HTTP Status | Meaning |
+|----------|-------------|---------|
+| `PERMIT` | 200 | Action allowed |
+| `SUSPEND` | 202 | Approval required before proceeding |
+| `BLOCK` | 403 | Action denied |
+
+**Rule: BLOCK beats SUSPEND.** One BLOCK = final BLOCK. Evaluation stops on first BLOCK.
+
+### Commerce Integration
+
+When the permission has `core:pricing:*` constraints, a consumption attestation is automatically issued after PERMIT. You don't need to call `POST /api/consume` separately.
+
+---
+
+## Dry-Run Authorization
+
+Test constraint configs without recording any state.
+
+```
+POST /api/authorize/dry-run
+```
+
+**Required scope:** `enforce:read`  
+**Rate limited:** 100 req/min per API key
+
+**Request:** Same format as `POST /api/enforce`
+
+**Response:**
+
+```json
+{
+  "final_decision": "PERMIT",
+  "would_record": false,
+  "evaluator_results": [ ... ]
+}
+```
+
+Nothing is recorded. Rate/cost counters are not incremented. Safe to run in CI.
+
+---
+
+## L3 Proof-of-Possession Token
+
+```json
+{
+  "timestamp": 1708780800000,
+  "nonce": "f3a2b1c9d8e7...",
+  "action": "flights:book",
+  "passport_id": "uni_abc123",
+  "signature": "base64_ed25519..."
+}
+```
+
+**Signed:** `{timestamp}:{nonce}:{action}:{passport_id}`  
+**Timestamp window:** 60 seconds  
+**Nonces:** one-time use, stored with expiry
+
+---
+
+## Example
+
+```bash
+# Gate check
+curl -X POST https://uniplex.ai/api/gates/gate_def456/check \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "passport_json": { "payload": {...}, "signature": "..." },
+    "action": "flights:search"
+  }'
+
+# CEL enforce with cost
+curl -X POST https://uniplex.ai/api/enforce \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{ "passport_id": "uni_abc123", "action": "flights:book", "cost_cents": 45000 }'
+
+# Dry-run
+curl -X POST https://uniplex.ai/api/authorize/dry-run \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{ "passport_id": "uni_abc123", "action": "flights:book", "cost_cents": 45000 }'
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Constraints (26 Evaluators)" href="/docs/concepts/guardrails" icon="sliders">
+    Full reference for all constraint types, categories, and sequences.
+  </Card>
+  <Card title="Attestations API" href="/docs/api-reference/audit-trail" icon="scroll">
+    Query, verify, and share attestation records.
+  </Card>
+</CardGroup>

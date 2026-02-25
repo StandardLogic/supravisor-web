@@ -1,0 +1,319 @@
+# Passports API
+
+Passports are your agents' cryptographic identity documents — Ed25519-signed credentials that prove who an agent is and what it's allowed to do. This API covers issuing, reading, revoking passports, and the core authorization endpoint.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## Issue Passport
+
+Create a new passport for an AI agent.
+
+```
+POST /api/passports
+```
+
+**Required scope:** `passports:issue`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agent_id` | string | ✅ | Slug identifier (alphanumeric, hyphens) — shows in audit logs |
+| `agent_name` | string | ✅ | Human-readable display name |
+| `issuer_id` | string | ✅ | The issuer that signs this passport |
+| `permissions` | string[] | ✅ | Granted permission namespaces |
+| `expires_in` | string | ❌ | Duration like `"90d"`, `"1y"` (default: `"365d"`) |
+| `public_key` | string | ❌ | Provide your own Ed25519 public key — server never generates or stores private keys |
+
+**Example Request:**
+
+```bash
+curl -X POST https://uniplex.ai/api/passports \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "research-bot",
+    "agent_name": "Research Bot",
+    "issuer_id": "issuer:mycompany.ai",
+    "permissions": ["web:search", "web:read", "mcp:read"],
+    "expires_in": "90d"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "agent_id": "research-bot",
+  "agent_name": "Research Bot",
+  "issuer_id": "issuer:mycompany.ai",
+  "permissions": ["web:search", "web:read", "mcp:read"],
+  "public_key": "base64_ed25519_public_key...",
+  "private_key": "base64_ed25519_private_key_SHOWN_ONCE",
+  "issued_at": "2026-02-24T10:00:00Z",
+  "expires_at": "2026-05-24T10:00:00Z",
+  "status": "active",
+  "passport_token": "base64_encoded_passport_json_for_gate_use..."
+}
+```
+
+<Warning>
+  `private_key` is shown exactly once and never stored by Supravisor. Set it as `UNIPLEX_PASSPORT_KEY` in your agent's environment immediately. It cannot be recovered.
+</Warning>
+
+---
+
+## List Passports
+
+Retrieve passports for the authenticated account.
+
+```
+GET /api/passports
+```
+
+**Required scope:** `passports:read`
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent_id` | string | Filter by agent ID |
+| `issuer_id` | string | Filter by issuer |
+| `status` | string | `active`, `expired`, or `revoked` |
+| `expiring_before` | string | ISO 8601 — passports expiring before this date |
+| `limit` | integer | Results per page (default: 50, max: 200) |
+| `offset` | integer | Pagination offset |
+
+**Example — find passports expiring in the next 30 days:**
+
+```bash
+curl "https://uniplex.ai/api/passports" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "status=active" \
+  --data-urlencode "expiring_before=2026-03-24T00:00:00Z"
+```
+
+**Response:**
+
+```json
+{
+  "passports": [
+    {
+      "passport_id": "uni_abc123",
+      "agent_id": "research-bot",
+      "agent_name": "Research Bot",
+      "issuer_id": "issuer:mycompany.ai",
+      "permissions": ["web:search", "web:read"],
+      "issued_at": "2026-02-24T10:00:00Z",
+      "expires_at": "2026-05-24T10:00:00Z",
+      "status": "active"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+## Get Passport
+
+Retrieve a single passport by ID. Never returns the private key.
+
+```
+GET /api/passports/:passport_id
+```
+
+**Required scope:** `passports:read`
+
+```bash
+curl https://uniplex.ai/api/passports/uni_abc123 \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:**
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "agent_id": "research-bot",
+  "agent_name": "Research Bot",
+  "issuer_id": "issuer:mycompany.ai",
+  "permissions": ["web:search", "web:read"],
+  "public_key": "base64_ed25519_public_key...",
+  "issued_at": "2026-02-24T10:00:00Z",
+  "expires_at": "2026-05-24T10:00:00Z",
+  "status": "active"
+}
+```
+
+---
+
+## Revoke Passport
+
+Immediately revoke a passport. Takes effect within milliseconds on all connected gates.
+
+```
+DELETE /api/passports/:passport_id
+```
+
+**Required scope:** `passports:revoke`
+
+```bash
+curl -X DELETE https://uniplex.ai/api/passports/uni_abc123 \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:** `204 No Content`
+
+<Warning>
+  Revocation is immediate and irreversible. Once revoked, the passport cannot be reinstated — you must issue a new one. L2/L3 gates enforce revocation within their cache window (60 seconds for L2, instant for L3).
+</Warning>
+
+---
+
+## Authorize
+
+Check if a passport token is authorized for an action at a specific gate. Returns the authorization decision and a signed attestation.
+
+```
+POST /api/authorize
+```
+
+**Required scope:** None (uses the gate's own authorization)
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `passport_token` | string | ✅ | The passport token from `agent.generate_token()` |
+| `action` | string | ✅ | The action to check (e.g., `web:search`) |
+| `gate_id` | string | ✅ | The gate to check against |
+| `resource` | string | ❌ | Target resource (e.g., URL or file path) |
+| `metadata` | object | ❌ | Additional context for constraint evaluation |
+| `dry_run` | boolean | ❌ | If `true`, evaluates but doesn't create an attestation |
+
+**Example Request:**
+
+```bash
+curl -X POST https://uniplex.ai/api/authorize \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "passport_token": "base64_passport_token_here",
+    "action": "web:search",
+    "gate_id": "gate_def456",
+    "resource": "google.com",
+    "metadata": {"user_id": "usr_123"}
+  }'
+```
+
+**Response — Allowed:**
+
+```json
+{
+  "allowed": true,
+  "decision": "allow",
+  "reason": "All constraints satisfied",
+  "attestation_id": "att_xyz789",
+  "constraints_evaluated": [
+    {
+      "type": "max_per_day",
+      "value": "$50.00",
+      "current": "$12.40",
+      "result": "pass"
+    },
+    {
+      "type": "domain_allowlist",
+      "value": "google.com,bing.com",
+      "current": "google.com",
+      "result": "pass"
+    }
+  ],
+  "checked_at": "2026-02-24T10:30:00Z"
+}
+```
+
+**Response — Denied:**
+
+```json
+{
+  "allowed": false,
+  "decision": "deny",
+  "reason": "Spending limit exceeded: $47.80 of $50.00 daily limit used",
+  "attestation_id": "att_abc456",
+  "constraints_evaluated": [
+    {
+      "type": "max_per_day",
+      "value": "$50.00",
+      "current": "$47.80",
+      "result": "fail",
+      "detail": "Would exceed daily limit: $47.80 + $5.00 = $52.80 > $50.00"
+    }
+  ],
+  "checked_at": "2026-02-24T22:45:00Z"
+}
+```
+
+---
+
+## Verify Passport
+
+Verify a passport's cryptographic signature and validity without checking a specific action.
+
+```
+POST /api/passports/verify
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `passport_token` | string | ✅ | The passport token to verify |
+| `gate_id` | string | ✅ | The gate to verify against (determines trusted issuers) |
+
+**Response:**
+
+```json
+{
+  "valid": true,
+  "issuer_trusted": true,
+  "agent_id": "research-bot",
+  "agent_name": "Research Bot",
+  "issuer_id": "issuer:mycompany.ai",
+  "permissions": ["web:search", "web:read"],
+  "expires_at": "2026-05-24T10:00:00Z"
+}
+```
+
+---
+
+## Error Codes
+
+| Code | Meaning |
+|------|---------|
+| `PASSPORT_EXPIRED` | The passport's `expires_at` has passed |
+| `PASSPORT_REVOKED` | The passport was manually revoked |
+| `ISSUER_NOT_TRUSTED` | The passport's issuer is not in the gate's trusted list |
+| `INVALID_SIGNATURE` | The passport's Ed25519 signature is invalid |
+| `PERMISSION_DENIED` | The passport doesn't include the requested action |
+| `RATE_LIMIT_EXCEEDED` | Rate constraint triggered |
+| `SPENDING_LIMIT_EXCEEDED` | Spending constraint triggered |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Gates API" href="/docs/api-reference/gates" icon="shield">
+    Create the enforcement checkpoints that evaluate passports.
+  </Card>
+  <Card title="Passports Concept" href="/docs/concepts/passports" icon="id-card">
+    Understand how passport enforcement works without a gate.
+  </Card>
+</CardGroup>

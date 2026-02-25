@@ -1,0 +1,122 @@
+# Use Case: MCP Server Protection
+
+<Note>
+  **The moment:** Knowing that every Claude tool call is checked against a policy before it executes — and every decision is on the record.
+</Note>
+
+You run an MCP server that gives AI agents (Claude, GPT, etc.) access to powerful tools — databases, APIs, file systems. You want to control which agents can use which tools, enforce rate limits, and audit every tool call.
+
+---
+
+## The Setup
+
+**Option A — OAuth for Claude Desktop**
+
+Claude can connect to Supravisor via OAuth:
+
+1. Register an OAuth client:
+   ```bash
+   POST /api/oauth/register
+   { "client_name": "Claude Desktop", "redirect_uris": ["..."] }
+   ```
+
+2. User authorizes via PKCE at `/oauth/authorize`
+
+3. Claude uses the Bearer token to call Supravisor MCP tools at `POST /api/mcp`
+
+**Option B — API Key for Programmatic Agents**
+
+```bash
+curl -X POST https://uniplex.ai/api/mcp \
+  -H "Authorization: Bearer uni_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{ "jsonrpc": "2.0", "method": "tools/call", "params": { "name": "check_gate", ... } }'
+```
+
+---
+
+## Protect Your MCP Server
+
+Add a gate check to your MCP server's tool handler:
+
+```typescript
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+
+const server = new Server({ name: 'my-tools', version: '1.0.0' }, {
+  capabilities: { tools: {} }
+});
+
+server.setRequestHandler('tools/call', async (request) => {
+  const { name, arguments: args } = request.params;
+
+  // Extract passport from request context
+  const passportJson = args._passport;
+  if (!passportJson) {
+    return {
+      error: {
+        code: 401,
+        message: 'Passport required',
+        data: { passport_required_url: 'https://uniplex.ai/issue?gate=gate_my-tools' }
+      }
+    };
+  }
+
+  // Check against gate
+  const checkRes = await fetch(`https://uniplex.ai/api/gates/gate_my-tools/check`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${process.env.UNIPLEX_API_KEY}` },
+    body: JSON.stringify({
+      passport_json: passportJson,
+      action: `mcp:${name}`,
+    }),
+  });
+
+  const { decision } = await checkRes.json();
+  if (decision !== 'allow') {
+    return { error: { code: 403, message: 'Permission denied' } };
+  }
+
+  // Proceed with tool call
+  return await handleTool(name, args);
+});
+```
+
+---
+
+## L3 Gates for High-Value Tools
+
+For tools that can take irreversible actions (sending emails, executing code, making purchases), use an **L3 gate**:
+
+- Requires Proof of Possession — agent proves it holds the private key
+- Prevents passport theft attacks (stolen passport = useless without private key)
+- Each tool call must include a fresh PoP token with a nonce
+
+```bash
+PATCH /api/gates/gate_my-tools
+{ "profile": "L3", "require_pop": true }
+```
+
+---
+
+## Audit Every Tool Call
+
+Every gate check produces a signed attestation. Query tool usage in the dashboard at `/attestations`:
+
+```bash
+GET /api/gates/gate_my-tools/attestations?limit=50
+```
+
+Share any decision with a public link:
+```
+https://uniplex.ai/s/[share_token]
+```
+
+---
+
+## Key Points
+
+- ✅ Any MCP server can integrate gate checks with ~10 lines of code
+- ✅ OAuth for Claude; API keys for programmatic agents
+- ✅ Anonymous access lets unknown agents discover your tool catalog
+- ✅ L3 gates protect high-value / irreversible tools with PoP
+- ✅ Every tool call produces a signed, shareable attestation

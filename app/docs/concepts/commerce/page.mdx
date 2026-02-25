@@ -1,0 +1,172 @@
+# Commerce & Billing
+
+Every billable agent interaction produces a **consumption attestation** signed by both parties. Neither side can deny the interaction happened. Disputes are resolved with cryptography, not arguments.
+
+---
+
+## How It Works
+
+```
+Buyer Agent → GET /api/discover   (find service)
+            → verify catalog signature locally (trustless)
+            → POST /api/gates/[id]/check  (authorize action)
+            → performs action
+            → POST /api/consume   (record consumption, both sides sign)
+Both sides  → hold signed receipts as proof
+```
+
+At month end, the provider runs settlement — batch-verifying all Ed25519 signatures and aggregating totals with bigint arithmetic.
+
+---
+
+## Consumption Attestations
+
+### Record Consumption
+
+```
+POST /api/consume
+```
+
+**Required scope:** `consume:write`
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "gate_id": "gate_def456",
+  "action": "flights:book",
+  "outcome": "success",
+  "quantity": 1,
+  "agent_pop": {
+    "signature": "base64_ed25519...",
+    "public_key": "base64...",
+    "timestamp": 1708780800000,
+    "nonce": "f3a2b1c9d8e7...",
+    "catalog_content_hash": "sha256:a3f9...",
+    "request_payload_hash": "sha256:b1c2..."
+  },
+  "request_payload_hash": "sha256:b1c2..."
+}
+```
+
+**Outcome → cost:**
+- `success` / `partial` → cost from catalog pricing
+- `error` / `timeout` → cost = 0 (agents not billed for failures)
+
+**Response:**
+```json
+{
+  "attestation_id": "att_ghi789",
+  "gate_signature": "base64_ed25519_by_gate...",
+  "cost_cents": 50,
+  "platform_fee_cents": 1,
+  "status": "recorded"
+}
+```
+
+**MCP:** `issue_consumption_attestation(...)`
+
+---
+
+## Proof of Possession (PoP)
+
+Required for all billable actions. Proves the agent holds the private key for the passport's `public_key` — making stolen passports worthless.
+
+```json
+{
+  "signature": "base64...",
+  "public_key": "base64...",
+  "timestamp": 1708780800000,
+  "nonce": "f3a2b1c9...",
+  "catalog_content_hash": "sha256:a3f9..."
+}
+```
+
+**Signed message:** `{timestamp}:{nonce}:{action}:{passport_id}`
+
+**Checks:** signature valid · timestamp within 300s · catalog hash matches · nonce not used before
+
+---
+
+## Money Arithmetic
+
+All amounts are **bigint** (integer cents). No floating-point anywhere. Platform fees use ceiling division.
+
+```typescript
+// ✅ Bigint cents — exact
+const cost: bigint = 5000n;  // $50.00
+
+// ❌ Never used
+const cost: number = 50.00;  // floating point precision loss
+```
+
+---
+
+## Nonce Replay Protection
+
+Each nonce is unique per `(nonce, passport_id, gate_id)`. A UNIQUE constraint on `ca_nonce_ledger` rejects replays at the database level. Nonces expire after 24h (hourly cron).
+
+---
+
+## Settlement
+
+```
+POST /api/billing
+```
+
+```json
+{
+  "gate_id": "gate_def456",
+  "period_type": "monthly",
+  "period_start": "2026-02-01T00:00:00Z",
+  "period_end": "2026-03-01T00:00:00Z"
+}
+```
+
+**Process:** claim attestations (FOR UPDATE SKIP LOCKED) → batch-verify Ed25519 → bigint aggregation → immutable settlement summary
+
+**Status machine:** `pending → invoiced → paid` (or `void`). `paid` and `void` are terminal.
+
+**MCP:** `generate_settlement(...)` · `update_settlement_status(...)`
+
+---
+
+## SLA Compliance
+
+```
+GET /api/gates/[gate_id]/sla?period_start=...&period_end=...
+```
+
+Measures actual uptime basis points and p99 latency against catalog guarantees. Returns `sla_met` and `credits_owed_cents` per permission.
+
+**MCP:** `get_sla_compliance(gate_id, period_start, period_end)`
+
+---
+
+## Key Security Properties
+
+| Property | Enforced By |
+|----------|------------|
+| Neither party can deny an interaction | Both hold Ed25519-signed receipts |
+| Agent can't be double-billed | Nonce UNIQUE constraint (database) |
+| Stolen passports can't be billed | PoP required — must hold private key |
+| Provider can't alter past records | Immutable table triggers |
+| No floating-point billing errors | All amounts bigint |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Commerce API" href="/docs/api-reference/commerce" icon="code">
+    Full reference for /api/consume, /api/billing, SLA endpoints.
+  </Card>
+  <Card title="Catalogs" href="/docs/concepts/catalogs" icon="book">
+    Catalog-pinned pricing — the anti-bait-and-switch guarantee.
+  </Card>
+  <Card title="Discovery API" href="/docs/api-reference/discovery" icon="search">
+    Public service discovery for agents.
+  </Card>
+  <Card title="Use Case: Travel Agent" href="/docs/use-cases/travel-agent" icon="plane">
+    Full bilateral metering walkthrough.
+  </Card>
+</CardGroup>

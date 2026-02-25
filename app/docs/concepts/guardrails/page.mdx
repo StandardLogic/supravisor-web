@@ -1,0 +1,268 @@
+# Guardrails
+
+You decide exactly what your agent can do. Not just *what* — but *how much*, *how fast*, *where*, and *under what conditions*.
+
+That's what guardrails are. The fine print on your agent's insurance policy. "Covered up to $500/day. No international transactions. Human approval required above $200. Never touches PII."
+
+Supravisor evaluates 26 constraint types on every gate check. Stack as many as you need. They're AND-evaluated — every single one must pass for an action to be allowed.
+
+---
+
+## Permissions vs. Guardrails
+
+People often ask: what's the difference between permissions on a passport and guardrails on a gate?
+
+**Permissions** are binary: the agent either has `payments:send` or it doesn't.
+
+**Guardrails** are continuous policies: the agent has `payments:send`, but only up to $50/day, only to approved domains, and only with human approval above $25.
+
+Permissions are the ceiling. Guardrails are the house rules within that ceiling.
+
+---
+
+## The 26 Constraint Types
+
+Constraints are organized into categories. Every category covers a different dimension of your agent's behavior.
+
+---
+
+### Spending Constraints
+
+**`max_per_action`** — The most any single action can cost.
+
+```json
+{ "max_per_action": "$5.00" }
+```
+
+Evaluation: Before each call, the gate checks the declared cost. Over the cap? Denied immediately.
+
+---
+
+**`max_per_day`** — Daily spend cap. Resets at midnight UTC.
+
+```json
+{ "max_per_day": "$50.00" }
+```
+
+---
+
+**`max_cumulative`** + **`cumulative_window`** — Rolling spend cap. Not a lifetime limit, but a rolling window.
+
+```json
+{
+  "max_cumulative": "$500.00",
+  "cumulative_window": "30d"
+}
+```
+
+This example: max $500 in any rolling 30-day period. The window slides — it's not a monthly reset.
+
+---
+
+**`approval_threshold`** — Any action above this cost triggers a human approval request. The gate pauses and waits.
+
+```json
+{ "approval_threshold": "$25.00" }
+```
+
+<Note>
+  Approval requests are sent to the email associated with the gate's owner account. The agent's request is held in pending state for up to 5 minutes. If no approval comes, it's automatically denied.
+</Note>
+
+---
+
+### Rate Constraints
+
+**`max_per_minute`** and **`max_per_hour`** — Token-bucket rate limiters. Stop runaway agents from hammering downstream services.
+
+```json
+{
+  "max_per_minute": 10,
+  "max_per_hour": 100
+}
+```
+
+Denial when exceeded: `"Rate limit exceeded: 10 actions per minute. Retry after 23 seconds."`
+
+---
+
+### Access Constraints
+
+**`domain_allowlist`** — Your agent can only reach listed domains. Everything else is blocked.
+
+```json
+{ "domain_allowlist": "openai.com,anthropic.com,api.github.com" }
+```
+
+**`domain_blocklist`** — These specific domains are always blocked, regardless of other settings.
+
+```json
+{ "domain_blocklist": "facebook.com,twitter.com,instagram.com,tiktok.com" }
+```
+
+<Note>
+  Allowlist is stricter than blocklist. Use `domain_allowlist` when you want to permit only known-safe destinations. Use `domain_blocklist` when you want to permit most of the web but exclude specific services.
+</Note>
+
+**`action_allowlist`** — Only these specific actions are permitted. Everything else is denied.
+
+```json
+{ "action_allowlist": "web:search,web:read,mcp:read" }
+```
+
+**`action_blocklist`** — These actions are always denied, even if the passport includes them as permissions.
+
+```json
+{ "action_blocklist": "files:delete,payments:send,email:delete" }
+```
+
+---
+
+### Safety Constraints
+
+**`read_only`** — When `true`, all write and mutate operations are blocked. Any action containing `write`, `create`, `update`, `delete`, `send`, or `post` in its name is rejected.
+
+```json
+{ "read_only": true }
+```
+
+**`no_pii_export`** — Enables PII detection on outgoing payloads. If personally identifiable information is detected (SSNs, credit card numbers, bulk email addresses, medical record identifiers), the action is denied.
+
+```json
+{ "no_pii_export": true }
+```
+
+---
+
+### Approval and Validation Constraints
+
+**`required`** — The request metadata must include a specific field. Tag every action with a user ID, session ID, or correlation ID for cleaner audit trails.
+
+```json
+{ "required": "user_id" }
+```
+
+---
+
+### Compliance Constraints
+
+**`model`** — Require that the request specifies a particular AI model. Useful for regulated industries that need to control which models process sensitive data.
+
+```json
+{ "model": "claude-3-5-sonnet" }
+```
+
+---
+
+### SLA Constraints
+
+**`response_time_ms`** — Maximum acceptable response time in milliseconds. SLA violations are logged in the audit trail.
+
+```json
+{ "response_time_ms": "2000" }
+```
+
+**`uptime_basis_points`** — Required uptime expressed in basis points (1 basis point = 0.01%). `9900` = 99.00% uptime. SLA violations are tracked and reportable.
+
+```json
+{ "uptime_basis_points": "9900" }
+```
+
+---
+
+### Temporal, Scope, Pricing, and Platform Constraints
+
+The full constraint system includes additional constraint types across temporal scheduling (time-of-day windows, expiry overrides), scope restrictions, pricing model controls (per-call, per-minute, subscription), and platform fee policies.
+
+Explore all available constraint types via the API:
+
+```bash
+# List all 26+ constraint definitions by category
+curl "https://uniplex.ai/api/constraints/types?category=temporal" \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+Or via MCP:
+> "List all available constraint types in the pricing category."
+
+---
+
+## Evaluation Order
+
+Constraints are evaluated in sequence. The first failure stops evaluation and returns a denial.
+
+1. Signature verification — is the passport cryptographically valid?
+2. Expiration check — is the passport still valid?
+3. Revocation check — has the passport been revoked?
+4. Issuer trust check — is the issuer on the trusted list?
+5. Permission check — does the passport include the requested action?
+6. `action_blocklist` — is this action explicitly blocked?
+7. `action_allowlist` — is this action in the allowlist (if set)?
+8. `domain_blocklist` — is the target domain blocked?
+9. `domain_allowlist` — is the target domain allowed (if allowlist set)?
+10. `read_only` — is this a write operation on a read-only gate?
+11. `required` — are required metadata fields present?
+12. `model` — does the request use the required model?
+13. `no_pii_export` — does the payload contain PII?
+14. `max_per_action` — is this single action within the per-action cap?
+15. `max_per_minute` / `max_per_hour` — rate check
+16. `max_per_day` / `max_cumulative` — spend check
+17. `approval_threshold` — does this need human approval?
+
+---
+
+## Full Configuration Example
+
+```json
+{
+  "constraints": {
+    "max_per_action": "$5.00",
+    "max_per_minute": 10,
+    "max_per_hour": 100,
+    "max_per_day": "$50.00",
+    "max_cumulative": "$500.00",
+    "cumulative_window": "30d",
+    "approval_threshold": "$25.00",
+    "domain_allowlist": "openai.com,anthropic.com",
+    "domain_blocklist": "facebook.com,twitter.com",
+    "action_allowlist": "web:search,web:read,mcp:read",
+    "action_blocklist": "files:delete,payments:send",
+    "read_only": false,
+    "no_pii_export": true,
+    "required": "user_id",
+    "model": "claude-3-5-sonnet",
+    "response_time_ms": "2000",
+    "uptime_basis_points": "9900"
+  }
+}
+```
+
+---
+
+## Templates vs. Custom Configs
+
+<CardGroup cols={2}>
+  <Card title="Start with a template" icon="grid">
+    Templates are pre-configured constraint sets for common agent types. Apply one, then tweak the values that don't fit. Faster than building from scratch, and harder to misconfigure.
+    
+    [Browse 30 templates →](/docs/templates/overview)
+  </Card>
+  <Card title="Build from scratch" icon="wrench">
+    Start with an empty constraint set and add only what you need. The custom constraints guide covers the most common patterns.
+    
+    [Custom constraints guide →](/docs/guides/custom-constraints)
+  </Card>
+</CardGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Custom Constraints Guide" href="/docs/guides/custom-constraints" icon="wrench">
+    Build exact guardrail configs for your specific use case.
+  </Card>
+  <Card title="Guardrails API" href="/docs/api-reference/guardrails" icon="code">
+    Programmatically create and manage constraint policies.
+  </Card>
+</CardGroup>

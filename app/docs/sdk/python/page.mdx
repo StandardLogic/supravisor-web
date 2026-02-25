@@ -1,0 +1,426 @@
+# Python SDK
+
+`pip install uniplex` — that's it. Full agent identity, policy enforcement, and audit trail in one library.
+
+The SDK handles Ed25519 cryptography, token generation, constraint evaluation, and API communication. You handle your agent's actual work. The two don't need to mix more than a single `authorize()` call.
+
+**Requirements:** Python 3.8+
+
+---
+
+## Installation
+
+```bash
+pip install uniplex
+```
+
+With optional integrations:
+
+```bash
+pip install uniplex[flask]    # Flask middleware helpers
+pip install uniplex[fastapi]  # FastAPI dependency helpers
+pip install uniplex[async]    # Async/await support
+```
+
+---
+
+## Quick Start
+
+```python
+from uniplex import Agent, Gate, TrustProfile
+
+# 1. Load agent from environment — reads UNIPLEX_PASSPORT_KEY
+agent = Agent.from_env()
+
+# 2. Create a gate with your rules
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_day": "$50.00",       # Daily spending cap
+        "domain_allowlist": "openai.com,anthropic.com"  # Allowed domains
+    }
+)
+
+# 3. Authorize before acting
+token = agent.generate_token()
+decision = gate.authorize(token, "web:search")
+
+# 4. Act on the result
+if decision.allowed:
+    print(f"Authorized! Attestation: {decision.attestation_id}")
+    # Do the actual work
+else:
+    print(f"Denied: {decision.reason}")
+    # Handle gracefully
+```
+
+---
+
+## Agent Class
+
+The `Agent` class represents an AI agent with a passport and private key.
+
+### `Agent.create(agent_id, permissions, issuer_id=None)` → `Agent`
+
+Create a self-issued L1 passport entirely client-side. No Supravisor account required.
+
+```python
+from uniplex import Agent
+
+# Self-issued — works immediately, no account needed
+agent = Agent.create(
+    agent_id="my-research-agent",
+    permissions=["web:search", "mcp:read"]
+)
+
+# With a managed issuer (requires UNIPLEX_ISSUER_PRIVATE_KEY in env)
+agent = Agent.create(
+    agent_id="my-agent",
+    permissions=["api:read"],
+    issuer_id="issuer:mycompany.ai",
+    expires_in="90d"       # How long before this passport expires
+)
+
+print(agent.passport_id)    # "uni_abc123"
+print(agent.permissions)    # ["web:search", "mcp:read"]
+print(agent.expires_at)     # datetime(2027, 2, 24, 0, 0)
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | `str` | ✅ | Slug identifier — shows in audit logs |
+| `permissions` | `list[str]` or `str` | ✅ | Permission namespaces to grant |
+| `issuer_id` | `str` | ❌ | Issuer ID — uses self-signing if omitted |
+| `expires_in` | `str` | ❌ | Duration like `"90d"`, `"1y"` (default: `"365d"`) |
+| `agent_name` | `str` | ❌ | Human-readable name for the dashboard |
+
+---
+
+### `Agent(passport_id, private_key)` → `Agent`
+
+Load an existing passport explicitly.
+
+```python
+import os
+from uniplex import Agent
+
+agent = Agent(
+    passport_id="uni_abc123",
+    private_key=os.environ["MY_AGENT_PRIVATE_KEY"]
+)
+```
+
+---
+
+### `Agent.from_env()` → `Agent`
+
+Load from the `UNIPLEX_PASSPORT_KEY` environment variable. The recommended pattern for production agents.
+
+```python
+from uniplex import Agent
+
+# Raises EnvironmentError if UNIPLEX_PASSPORT_KEY is not set
+agent = Agent.from_env()
+```
+
+---
+
+### `Agent.from_json(json_str)` → `Agent`
+
+Restore from a previously exported passport.
+
+```python
+from uniplex import Agent
+
+# Save — useful for persisting across restarts
+passport_json = agent.export_passport()
+
+# Restore
+agent = Agent.from_json(passport_json)
+```
+
+---
+
+### `agent.authorize(action, resource=None, metadata=None)` → `Decision`
+
+Check if this agent can perform an action. The main call you'll make.
+
+```python
+# Simple authorization
+decision = agent.authorize("web:search")
+
+# With resource context — useful for domain constraints
+decision = agent.authorize("files:read", resource="/project/main.py")
+
+# With metadata — required when gate uses 'required' constraint
+decision = agent.authorize(
+    "payments:send",
+    resource="stripe:charge_25.00",
+    metadata={"user_id": "usr_123", "session_id": "sess_abc"}
+)
+
+if decision.allowed:
+    proceed_with_action()
+else:
+    handle_denial(decision.reason)
+```
+
+---
+
+### `agent.generate_token(nonce=None, metadata=None)` → `str`
+
+Generate a signed passport token to pass to a gate manually. Tokens are single-use at L2/L3 and include a nonce for replay protection.
+
+```python
+token = agent.generate_token()
+token = agent.generate_token(nonce="custom-nonce-123")
+token = agent.generate_token(metadata={"session_id": "sess_abc"})
+```
+
+---
+
+### Agent Properties
+
+| Property | Type | What it is |
+|----------|------|------------|
+| `passport_id` | `str` | The passport ID (`uni_...`) |
+| `agent_id` | `str` | The agent slug |
+| `agent_name` | `str` | The human-readable name |
+| `permissions` | `list[str]` | Granted permissions |
+| `issuer_id` | `str` | The signing issuer |
+| `expires_at` | `datetime` | When the passport expires |
+| `public_key` | `str` | Base64 public key |
+
+---
+
+## Gate Class
+
+The `Gate` class creates a local enforcement point. All verification runs in-process — no network call unless you're using L3 revocation checks.
+
+### `Gate(profile, trusted_issuers=None, constraints=None, gate_id=None)` → `Gate`
+
+```python
+from uniplex import Gate, TrustProfile
+
+# L1 — no issuer verification (dev/testing only)
+gate = Gate(profile=TrustProfile.L1)
+
+# L2 — production-grade with trusted issuers and constraints
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_day": "$50.00",           # Daily spending cap
+        "max_per_minute": 10,              # Rate limit
+        "domain_allowlist": "openai.com,anthropic.com",  # Allowed domains
+        "read_only": False                 # Writes permitted
+    }
+)
+
+# Load a managed gate by ID — constraints come from dashboard config
+gate = Gate(gate_id="gate_def456", api_key="uni_xxxx")
+```
+
+---
+
+### `gate.authorize(passport_token, action, resource=None, metadata=None)` → `Decision`
+
+Verify a passport and evaluate all constraints.
+
+```python
+decision = gate.authorize(token, "web:search")
+decision = gate.authorize(token, "payments:send", resource="stripe:charge_50.00")
+decision = gate.authorize(
+    token, "api:read",
+    metadata={"user_id": "usr_123", "cost": "2.50"}
+)
+```
+
+---
+
+### `gate.verify(passport_token)` → `VerificationResult`
+
+Verify a passport's validity without checking a specific action. Useful for authentication-only checks.
+
+```python
+result = gate.verify(token)
+
+print(result.valid)           # True/False
+print(result.issuer_trusted)  # True/False
+print(result.agent_id)        # "my-research-agent"
+print(result.issuer_id)       # "issuer:mycompany.ai"
+print(result.expires_at)      # datetime
+print(result.permissions)     # ["web:search", "mcp:read"]
+```
+
+---
+
+## Decision Class
+
+Every `gate.authorize()` call returns a `Decision`.
+
+| Property | Type | What it is |
+|----------|------|------------|
+| `allowed` | `bool` | Whether the action is permitted |
+| `reason` | `str` | Plain English explanation — always present |
+| `attestation_id` | `str \| None` | ID of the signed decision record |
+| `constraints_evaluated` | `list[dict]` | Every constraint and its result |
+
+```python
+decision = gate.authorize(token, "web:search")
+
+print(decision.allowed)          # True
+print(decision.reason)           # "All constraints satisfied"
+print(decision.attestation_id)   # "att_xyz789"
+
+for constraint in decision.constraints_evaluated:
+    print(f"{constraint['type']}: {constraint['result']}")
+    # max_per_day: pass
+    # domain_allowlist: pass
+```
+
+---
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `UNIPLEX_PASSPORT_KEY` | Agent's Ed25519 private key (base64). Used by `Agent.from_env()` |
+| `UNIPLEX_API_KEY` | API key (`uni_xxxx`). Used by `UniplexClient` and managed gates |
+| `UNIPLEX_GATE_ID` | Default gate ID. Used by `agent.authorize()` if no gate specified |
+| `UNIPLEX_ISSUER_PRIVATE_KEY` | Issuer signing key. Used for issuing new passports |
+
+---
+
+## Error Handling
+
+All errors inherit from `UniplexError`.
+
+```python
+from uniplex import (
+    Agent,
+    PassportExpiredError,
+    PassportRevokedError,
+    InsufficientPermissionsError,
+    RateLimitExceededError,
+    SpendingLimitExceededError,
+    UniplexError
+)
+
+try:
+    agent = Agent.from_env()
+    decision = gate.authorize(agent.generate_token(), "payments:send")
+
+except PassportExpiredError:
+    # Passport passed its expires_at — issue a new one
+    new_passport = rotate_credentials()
+
+except PassportRevokedError:
+    # Passport was manually revoked — security event
+    alert_security_team()
+
+except InsufficientPermissionsError as e:
+    # Passport doesn't have the requested permission
+    print(f"Missing permission: {e.required_permission}")
+
+except RateLimitExceededError as e:
+    # max_per_minute or max_per_hour exceeded
+    import time
+    time.sleep(e.retry_after_seconds)  # Wait and retry
+
+except SpendingLimitExceededError as e:
+    # max_per_day, max_per_action, or max_cumulative exceeded
+    print(f"Limit: {e.limit}, Current: {e.current}")
+
+except UniplexError as e:
+    print(f"Supravisor error: {e}")
+```
+
+---
+
+## Full Example: Web Research Agent
+
+A complete agent with spending limits, domain allowlist, retry logic, and credential health monitoring:
+
+```python
+import os
+import logging
+from typing import Optional
+from uniplex import Agent, Gate, TrustProfile, RateLimitExceededError
+import time
+
+logger = logging.getLogger(__name__)
+
+# Initialize once at startup — don't re-create on every request
+agent = Agent.from_env()
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_day": "$20.00",           # Daily budget
+        "max_per_minute": 5,               # Gentle rate limit
+        "max_per_action": "$2.00",         # Cap per API call
+        "domain_allowlist": "google.com,bing.com,arxiv.org,wikipedia.org",
+        "read_only": True,                 # No writes
+        "no_pii_export": True              # Block PII in responses
+    }
+)
+
+def search_web(query: str, max_retries: int = 3) -> Optional[list]:
+    """Perform a web search — Supravisor enforces before any call goes out."""
+    for attempt in range(max_retries):
+        try:
+            token = agent.generate_token(
+                metadata={"query": query[:100], "session_id": os.environ.get("SESSION_ID")}
+            )
+            decision = gate.authorize(token, "web:search", resource=f"search:{query}")
+            
+            if not decision.allowed:
+                logger.warning(f"Search blocked: {decision.reason} [att:{decision.attestation_id}]")
+                return None
+            
+            results = perform_search_api_call(query)
+            logger.info(f"Search authorized [att:{decision.attestation_id}]")
+            return results
+            
+        except RateLimitExceededError as e:
+            if attempt < max_retries - 1:
+                logger.info(f"Rate limited, waiting {e.retry_after_seconds}s...")
+                time.sleep(e.retry_after_seconds)
+            else:
+                logger.error("Rate limit exceeded after retries")
+                return None
+    
+    return None
+
+def read_page(url: str) -> Optional[str]:
+    """Fetch a web page — enforced by the same gate."""
+    token = agent.generate_token()
+    decision = gate.authorize(token, "web:read", resource=url)
+    
+    if not decision.allowed:
+        logger.warning(f"Page blocked: {decision.reason} (url={url})")
+        return None
+    
+    return fetch_page_content(url)
+
+# Warn if credentials are expiring soon
+import datetime
+days_remaining = (agent.expires_at - datetime.datetime.utcnow()).days
+if days_remaining < 14:
+    logger.warning(f"Passport expires in {days_remaining} days — rotate soon!")
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="TypeScript SDK" href="/docs/sdk/typescript" icon="node-js">
+    The npm equivalent for Node.js and TypeScript.
+  </Card>
+  <Card title="Gates" href="/docs/concepts/gates" icon="shield">
+    Deep dive into gate configuration.
+  </Card>
+</CardGroup>

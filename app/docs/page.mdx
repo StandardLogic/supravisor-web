@@ -1,0 +1,94 @@
+Your AI agent just sent an email you didn't authorize. Or deleted a file. Or spent $300 on an API you didn't know it was calling. By the time you notice, it's done.
+
+Supravisor is the layer between your agents and the consequences. Give your agents a verified identity, define exactly what they're allowed to do, and get a signed record of everything they actually did — automatically, on every action.
+
+---
+
+## The Moment That Makes It Click
+
+You're away from your desk. Your Claude agent is working through a task. Your phone buzzes.
+
+> **Your Research Bot wants to delete contract.pdf — Allow or Deny?**
+
+That notification — that feeling of being *in control* even when you're not watching — is what Supravisor is built for. You set the rules once. The system enforces them forever.
+
+---
+
+## Four Primitives. Total Control.
+
+<CardGroup cols={2}>
+  <Card title="Passports" icon="id-card" color="#00d9ff">
+    A tamper-proof credential that gives your agent a verified identity and declares exactly what it's allowed to do. Like a driver's license and insurance policy in one document. Works instantly — no gate required.
+  </Card>
+  <Card title="Gates" icon="shield-check" color="#00d9ff">
+    A local enforcement checkpoint. Checks every passport in under a millisecond. No network call. The bouncer that reads the ID, checks the rulebook, and signs a record of every decision.
+  </Card>
+  <Card title="Guardrails" icon="sliders" color="#00d9ff">
+    26 constraint types: spending limits, rate caps, domain allowlists, PII controls, approval workflows, and more. The fine print on your agent's insurance policy — enforced automatically.
+  </Card>
+  <Card title="Attestations" icon="scroll" color="#00d9ff">
+    A tamper-proof receipt for every decision. Allow or deny. Not a log — a proof. Hand it to an auditor, a lawyer, or a skeptical board member. It can't be faked.
+  </Card>
+</CardGroup>
+
+---
+
+## How It Works
+
+```
+Your AI Agent  →  presents Passport  →  Gate checks it  →  Guardrails enforced  →  Attestation logged
+```
+
+1. **Issue a Passport** — your agent gets a cryptographic identity signed by your issuer
+2. **Create a Gate** — protects whatever resource your agent is accessing
+3. **Agent presents Passport** — the gate verifies it locally, enforces your rules, logs the decision
+4. **Read the Attestation** — signed proof of what happened, impossible to alter after the fact
+
+**The zero-friction shortcut:** Issue a passport and enforce constraints immediately — no gate, no account setup, no infrastructure. A self-signed passport gives you policy enforcement from minute one. Add a gate when you're ready for remote verification and a full audit trail.
+
+---
+
+## Start Where It Makes Sense
+
+You don't have to implement everything. Each level gives you real value:
+
+| Level | What You Use | Infrastructure | Time to Value |
+|-------|-------------|----------------|---------------|
+| **1 — Passport Only** | Passport + SDK enforcement | **None** | 5 minutes |
+| **2 — Gate Only** | Gate + anonymous access | Gate server | 15 minutes |
+| **3 — Passport + Gate** | Full verification + audit trail | Gate server | 30 minutes |
+| **4 — Full Stack** | Issuers, Passports, Gates, Catalogs, Commerce, Attestations | Full platform | Hours |
+
+Start at Level 1. Upgrade when your needs grow.
+
+---
+
+## Start in 5 Minutes
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/docs/quickstart">
+    Install the SDK and have a verified agent running in 5 minutes.
+  </Card>
+  <Card title="No Code? Start Here" icon="user" href="/docs/for-humans">
+    Plain English. Zero jargon. Works with Claude, ChatGPT, or any AI.
+  </Card>
+  <Card title="Protect Claude" icon="terminal" href="/docs/guides/protect-claude">
+    Connect Supravisor to Claude and Claude Code right now.
+  </Card>
+  <Card title="Agent Autonomy" icon="robot" href="/docs/guides/agent-autonomy">
+    How agents authenticate and manage their own credentials.
+  </Card>
+</CardGroup>
+
+---
+
+## The Uniplex Protocol
+
+Supravisor runs on the **Uniplex open protocol** — an open standard for agent identity built on Ed25519 (a type of digital signature that's mathematically impossible to forge) signatures.
+
+- Open source: [github.com/uniplexprotocol/uniplex](https://github.com/uniplexprotocol/uniplex)
+- Python: `pip install uniplex`
+- TypeScript: `npm install uniplex`
+- MCP Server: `npx uniplex-mcp-manage`
+
+The protocol is open. The platform is managed. Both give your agents the trust layer they need.

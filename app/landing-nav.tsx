@@ -8,7 +8,7 @@ import { SupravisorLogo } from '@/components/logo'
 
 const navLinks = [
   { href: '#how-it-works', label: 'How It Works' },
-  { href: 'https://uniplex.ai/docs', label: 'Developers' },
+  { href: '/docs', label: 'Developers' },
   { href: '#features', label: 'Features' },
   { href: '#commerce', label: 'Commerce' },
 ]

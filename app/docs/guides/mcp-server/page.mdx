@@ -1,0 +1,298 @@
+# MCP Server Integration
+
+MCP (Model Context Protocol) is how AI clients like Claude communicate with external tools. The Supravisor MCP server exposes 21 tools that let any MCP-compatible client manage your entire Supravisor setup through natural language.
+
+Instead of navigating the dashboard or writing API calls, you say:
+
+> "Issue a passport for my research agent with web:search permissions, expiring in 90 days."
+
+Claude handles the rest.
+
+---
+
+## Why This Matters
+
+Most agent infrastructure is managed by developers writing API calls. MCP flips that: the AI manages its own infrastructure, with humans approving and reviewing rather than implementing. This is what autonomous agent management looks like in practice.
+
+---
+
+## Installation
+
+```bash
+npx uniplex-mcp-manage
+```
+
+This command:
+1. Starts the Supravisor MCP server
+2. Opens your browser for OAuth 2.0 PKCE authorization (one-time)
+3. Stores the access token locally at `~/.uniplex/mcp-token.json`
+4. Listens for MCP connections on `localhost:3456`
+
+**Transport:** Streamable HTTP — compatible with all MCP clients.
+
+---
+
+## Authentication
+
+On first run, the server opens a browser:
+
+```
+Opening browser for Supravisor authorization...
+https://uniplex.ai/oauth/authorize?...
+
+Waiting for authorization... (press Ctrl+C to cancel)
+```
+
+1. Log in with your Supravisor account
+2. Authorize MCP access
+3. The browser redirects, terminal shows `✓ Authorized`
+
+Tokens are valid for 30 days and auto-refresh. Subsequent runs use the cached token automatically.
+
+---
+
+## Adding to Claude
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "supravisor": {
+      "command": "npx",
+      "args": ["uniplex-mcp-manage"],
+      "env": {
+        "UNIPLEX_API_KEY": "uni_xxxx"
+      }
+    }
+  }
+}
+```
+
+### Claude Code
+
+```bash
+claude mcp add supravisor npx uniplex-mcp-manage
+```
+
+---
+
+## All 21 Tools
+
+### Issuer Management
+
+| Tool | What it does |
+|------|-------------|
+| `create_issuer` | Create a new signing authority with a generated keypair |
+| `list_issuers` | List all issuers with trust tier and status |
+| `get_issuer` | Get full details of a specific issuer |
+| `update_issuer` | Update issuer name or description |
+| `revoke_issuer` | Revoke an issuer and instantly invalidate all its passports |
+
+```json
+// Example: create_issuer
+{
+  "name": "Production Agents",
+  "issuer_id": "issuer:acmecorp.ai",
+  "description": "Signs all production agent credentials"
+}
+```
+
+---
+
+### Passport Management
+
+| Tool | What it does |
+|------|-------------|
+| `issue_passport` | Issue a new passport for an agent |
+| `list_passports` | List passports with optional filters |
+| `get_passport` | Get passport details (public data only) |
+| `revoke_passport` | Revoke a passport immediately |
+
+```json
+// Example: issue_passport
+{
+  "agent_id": "research-bot",
+  "agent_name": "Research Bot",
+  "issuer_id": "issuer:acmecorp.ai",
+  "permissions": ["web:search", "mcp:read"],
+  "expires_in": "90d"
+}
+```
+
+---
+
+### Gate Management
+
+| Tool | What it does |
+|------|-------------|
+| `create_gate` | Create a new enforcement gate |
+| `list_gates` | List all gates with their configurations |
+| `get_gate` | Get full gate config including constraints |
+| `update_gate` | Update gate configuration or constraints |
+| `delete_gate` | Delete a gate |
+
+```json
+// Example: create_gate
+{
+  "name": "Research Gate",
+  "profile": "L2",
+  "trusted_issuers": ["issuer:acmecorp.ai"],
+  "template": "web-research-agent"
+}
+```
+
+---
+
+### Authorization
+
+| Tool | What it does |
+|------|-------------|
+| `check_authorization` | Check if a passport token is authorized for an action |
+| `verify_passport` | Verify a passport's signature and validity |
+
+```json
+// Example: check_authorization
+{
+  "passport_token": "base64_token...",
+  "action": "web:search",
+  "gate_id": "gate_def456"
+}
+```
+
+---
+
+### Attestations
+
+| Tool | What it does |
+|------|-------------|
+| `list_attestations` | List attestations with filters |
+| `get_attestation` | Get a single attestation with full details |
+| `export_attestations` | Export attestations as JSON or CSV |
+
+```json
+// Example: list_attestations
+{
+  "agent_id": "research-bot",
+  "decision": "deny",
+  "limit": 20,
+  "from": "2026-02-01T00:00:00Z"
+}
+```
+
+---
+
+### Templates
+
+| Tool | What it does |
+|------|-------------|
+| `list_templates` | List all available constraint templates |
+| `apply_template` | Apply a template to a gate |
+
+```json
+// Example: apply_template
+{
+  "gate_id": "gate_def456",
+  "template": "read-only-researcher"
+}
+```
+
+---
+
+## Natural Language Prompts That Work
+
+The MCP server is designed for conversation. Here's what works well:
+
+### Issuer and Passport Management
+
+> "Issue a passport for my research agent with web:search and mcp:read permissions, expiring in 90 days. Use issuer:acmecorp.ai."
+
+Claude calls `issue_passport` and shows you the passport ID and private key (shown once — save it immediately).
+
+> "Show me all active passports that expire in the next 30 days."
+
+Claude calls `list_passports` with expiry filters.
+
+> "Revoke the passport for the agent named 'old-bot'."
+
+Claude finds it and calls `revoke_passport`.
+
+---
+
+### Gate Inspection and Updates
+
+> "What gates do I have and which issuers do they trust?"
+
+Claude calls `list_gates` and formats a clean summary.
+
+> "Update the Research Gate to block twitter.com and facebook.com."
+
+Claude calls `update_gate` with the updated domain blocklist.
+
+> "Show me the full config for my Research Gate."
+
+Claude calls `get_gate` and displays constraints, trusted issuers, and security profile.
+
+---
+
+### Audit and Debugging
+
+> "Show me the last 10 authorization decisions for my research agent."
+
+Claude calls `list_attestations` with `agent_id` and `limit=10`.
+
+> "Why was the research agent blocked 3 hours ago?"
+
+Claude finds the denial attestation and explains the reason from `constraints_evaluated`.
+
+> "Export all denials from last week as CSV."
+
+Claude calls `export_attestations` with decision and date filters.
+
+---
+
+## Example: Full Setup via MCP
+
+Here's what a complete setup conversation looks like:
+
+```
+You: "I need to set up Supravisor for my new research agent.
+      Web search and page reading only. $20/day limit.
+      Block social media."
+
+Claude: I'll set this up. Let me:
+1. Create an issuer for your agents
+2. Issue a passport for the research agent
+3. Create a gate with your requirements
+
+[calls create_issuer, issue_passport, create_gate]
+
+Done! Here's what I created:
+- Issuer: issuer:yourname.ai
+- Passport ID: uni_abc123
+- Gate ID: gate_xyz789
+- Constraints: web:search + web:read only, $20/day,
+  social media blocked
+
+⚠️ Save this private key now (shown once):
+ed25519_abc...
+
+Set UNIPLEX_PASSPORT_KEY=ed25519_abc... in your agent's environment.
+```
+
+One conversation. Full trust infrastructure. No dashboard navigation required.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Protect Claude" href="/docs/guides/protect-claude" icon="robot">
+    Step-by-step integration with Claude Desktop and Claude Code.
+  </Card>
+  <Card title="Agent Autonomy" href="/docs/guides/agent-autonomy" icon="cpu">
+    Let agents manage their own credentials through MCP.
+  </Card>
+</CardGroup>

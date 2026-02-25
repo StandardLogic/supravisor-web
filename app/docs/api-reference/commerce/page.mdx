@@ -1,0 +1,318 @@
+# Commerce API
+
+The commerce API records billable usage, generates settlement reports, and measures SLA compliance. All monetary amounts use **bigint** (integer cents) — no floating-point arithmetic anywhere.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## Record Consumption
+
+Record one billable interaction. Requires Proof of Possession for all actions with pricing constraints.
+
+```
+POST /api/consume
+```
+
+**Required scope:** `consume:write`
+
+**Request Body:**
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "gate_id": "gate_def456",
+  "action": "flights:book",
+  "outcome": "success",
+  "quantity": 1,
+  "agent_pop": {
+    "signature": "base64_ed25519...",
+    "public_key": "base64_public_key...",
+    "timestamp": 1708780800000,
+    "nonce": "f3a2b1c9d8e7a6b5c4d3e2f1a0b9c8d7",
+    "catalog_content_hash": "sha256:a3f9e7c2...",
+    "request_payload_hash": "sha256:b1c2d3e4..."
+  },
+  "request_payload_hash": "sha256:b1c2d3e4...",
+  "response_payload_hash": "sha256:c5d6e7f8...",
+  "metadata": {}
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `passport_id` | `string` | ✅ | Consuming agent's passport |
+| `gate_id` | `string` | ✅ | Gate where action was authorized |
+| `action` | `string` | ✅ | Permission key exercised |
+| `outcome` | `string` | ✅ | `success` \| `error` \| `timeout` \| `partial` |
+| `quantity` | `number` | ✅ | Units consumed |
+| `agent_pop` | `object` | ✅ (billable) | Proof of Possession token |
+| `request_payload_hash` | `string` | ✅ | SHA-256 of request body |
+| `response_payload_hash` | `string` | ❌ | SHA-256 of response body |
+| `metadata` | `object` | ❌ | Arbitrary context |
+
+**Cost rules:**
+- `outcome: error` or `timeout` → cost = 0 (agents not billed for failed calls)
+- `outcome: success` or `partial` → cost resolved from passport's pinned catalog version
+
+**Response:**
+
+```json
+{
+  "attestation_id": "att_ghi789",
+  "gate_signature": "base64_ed25519_gate_signature...",
+  "timestamp": "2026-02-24T15:30:00Z",
+  "cost_cents": 50,
+  "platform_fee_cents": 1,
+  "status": "recorded"
+}
+```
+
+The `gate_signature` signs the canonical attestation payload. Both parties can verify independently.
+
+**Error — nonce replay:**
+```json
+{
+  "error": "nonce_already_used",
+  "message": "This nonce has already been used for this passport and gate combination."
+}
+```
+
+---
+
+## Proof of Possession Token
+
+```json
+{
+  "signature": "base64_ed25519_signature...",
+  "public_key": "base64_agent_public_key...",
+  "timestamp": 1708780800000,
+  "nonce": "f3a2b1c9d8e7a6b5c4d3e2f1a0b9c8d7",
+  "catalog_content_hash": "sha256:a3f9e7c2...",
+  "request_payload_hash": "sha256:b1c2d3e4..."
+}
+```
+
+**Message signed:** `{timestamp}:{nonce}:{action}:{passport_id}`
+
+**Validation checks:**
+1. Signature valid against `passport.payload.public_key`
+2. Timestamp within ±300 seconds of server time
+3. `catalog_content_hash` matches passport's `catalog_content_hash`
+4. `request_payload_hash` matches the actual request body
+5. Nonce not previously seen in `ca_nonce_ledger`
+
+---
+
+## Generate Settlement
+
+Aggregate consumption attestations for a billing period into an immutable settlement record.
+
+```
+POST /api/billing
+```
+
+**Required scope:** `billing:write`
+
+```json
+{
+  "gate_id": "gate_def456",
+  "period_type": "monthly",
+  "period_start": "2026-02-01T00:00:00Z",
+  "period_end": "2026-03-01T00:00:00Z",
+  "agent_id": "uni_abc123"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `gate_id` | `string` | ✅ | Gate to settle |
+| `period_type` | `string` | ✅ | `monthly`, `weekly`, or `custom` |
+| `period_start` | `string` | ✅ | ISO 8601 period start |
+| `period_end` | `string` | ✅ | ISO 8601 period end |
+| `agent_id` | `string` | ❌ | Filter to one agent's passport |
+
+**Response:**
+
+```json
+{
+  "settlement_id": "stl_abc123",
+  "gate_id": "gate_def456",
+  "period_type": "monthly",
+  "period_start": "2026-02-01T00:00:00Z",
+  "period_end": "2026-03-01T00:00:00Z",
+  "total_cost_cents": 45000,
+  "total_platform_fee_cents": 450,
+  "total_transactions": 9000,
+  "status": "pending",
+  "content_hash": "sha256:d4e5f6a7...",
+  "permission_breakdown": {
+    "flights:search": { "count": 8000, "cost_cents": 16000 },
+    "flights:book": { "count": 1000, "cost_cents": 50000 }
+  },
+  "outcome_breakdown": {
+    "success": 8950,
+    "error": 30,
+    "timeout": 20
+  }
+}
+```
+
+The `content_hash` is a SHA-256 hash of the canonical settlement payload, signed by the platform. Immutable after creation.
+
+---
+
+## List Settlements
+
+```
+GET /api/billing
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `gate_id` | `string` | Filter by gate |
+| `agent_id` | `string` | Filter by agent |
+| `period_type` | `string` | `monthly`, `weekly`, `custom` |
+| `status` | `string` | `pending`, `invoiced`, `paid`, `disputed`, `void` |
+| `from` | `string` | ISO 8601 start date |
+| `to` | `string` | ISO 8601 end date |
+| `limit` | `number` | Results per page (default: 50) |
+| `offset` | `number` | Pagination offset |
+
+---
+
+## Update Settlement Status
+
+```
+PATCH /api/billing/[settlementId]/status
+```
+
+```json
+{ "new_status": "invoiced" }
+```
+
+**Valid transitions:**
+
+| From | To |
+|------|----|
+| `pending` | `invoiced`, `void` |
+| `invoiced` | `paid`, `disputed`, `void` |
+| `disputed` | `invoiced`, `void` |
+| `paid` | — (final state) |
+| `void` | — (final state) |
+
+`paid` and `void` are **terminal** — no further transitions.
+
+---
+
+## SLA Compliance
+
+Check whether a gate met its catalog SLA guarantees for a period.
+
+```
+GET /api/gates/[gate_id]/sla
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `period_start` | `string` | ✅ | ISO 8601 |
+| `period_end` | `string` | ✅ | ISO 8601 |
+| `permission_key` | `string` | ❌ | Filter to one permission |
+
+**Response:**
+
+```json
+{
+  "gate_id": "gate_def456",
+  "period_start": "2026-02-01T00:00:00Z",
+  "period_end": "2026-03-01T00:00:00Z",
+  "permissions": {
+    "flights:book": {
+      "guaranteed_uptime_basis_points": 9990,
+      "actual_uptime_basis_points": 9995,
+      "guaranteed_max_latency_ms": 500,
+      "actual_p99_latency_ms": 312,
+      "total_calls": 1000,
+      "successful_calls": 998,
+      "sla_met": true,
+      "credits_owed_cents": 0
+    },
+    "flights:search": {
+      "guaranteed_uptime_basis_points": 9990,
+      "actual_uptime_basis_points": 9870,
+      "guaranteed_max_latency_ms": 200,
+      "actual_p99_latency_ms": 205,
+      "total_calls": 8000,
+      "successful_calls": 7896,
+      "sla_met": false,
+      "credits_owed_cents": 1200
+    }
+  },
+  "overall_sla_met": false,
+  "total_credits_owed_cents": 1200
+}
+```
+
+Uptime is measured in **basis points** (bps): 9990 bps = 99.90%. Credits are computed from the catalog's credit schedule.
+
+---
+
+## Cumulative State
+
+The spending and rate counters maintained per passport per window.
+
+```
+GET /api/passports/[passportId]/state
+```
+
+**Response:**
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "windows": {
+    "daily": {
+      "spend_cents": 12500,
+      "call_count": 2500,
+      "window_start": "2026-02-24T00:00:00Z",
+      "window_end": "2026-02-25T00:00:00Z"
+    },
+    "monthly": {
+      "spend_cents": 45000,
+      "call_count": 9000,
+      "window_start": "2026-02-01T00:00:00Z",
+      "window_end": "2026-03-01T00:00:00Z"
+    }
+  }
+}
+```
+
+**Reset state (for testing):**
+
+```
+POST /api/passports/[passportId]/state/reset
+{ "window_type": "daily" }
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Commerce Concepts" href="/docs/concepts/commerce" icon="credit-card">
+    How bilateral metering works end-to-end.
+  </Card>
+  <Card title="Discovery API" href="/docs/api-reference/discovery" icon="search">
+    Public endpoint for finding billable services.
+  </Card>
+  <Card title="Catalogs" href="/docs/concepts/catalogs" icon="book">
+    How catalog version pinning prevents billing surprises.
+  </Card>
+  <Card title="MCP Tools" href="/docs/sdk/mcp-tools" icon="wrench">
+    Commerce tools available via the MCP server.
+  </Card>
+</CardGroup>

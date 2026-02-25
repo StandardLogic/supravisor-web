@@ -1,0 +1,208 @@
+# Discovery API
+
+The discovery endpoint is **public** — no authentication required. AI agents use it to find services by capability, filter by price and SLA, and verify the results cryptographically before committing.
+
+Every result includes a `catalog_signature` the agent can verify locally. You don't need to trust the discovery server — you trust the math.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## Discover Services
+
+```
+GET /api/discover
+```
+
+**Authentication:** None required  
+**Cached:** 60 seconds  
+**Rate limited:** 100 req/min per IP
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `capability` | `string` | ✅ | Permission key to search for. Supports wildcards: `flights:*`, `research:summarize` |
+| `max_price_cents` | `number` | ❌ | Maximum cost per call in cents (bigint-safe integer) |
+| `min_uptime_bp` | `number` | ❌ | Minimum uptime in basis points (e.g. `9990` = 99.90%) |
+| `max_response_time_ms` | `number` | ❌ | Maximum p99 latency in milliseconds |
+| `pricing_model` | `string` | ❌ | `per_call`, `per_minute`, or `subscription` |
+| `sort` | `string` | ❌ | `price_asc`, `price_desc`, `uptime_desc`, `response_asc` |
+| `limit` | `number` | ❌ | Results per page (default: 20, max: 100) |
+| `offset` | `number` | ❌ | Pagination offset |
+
+### Response
+
+```json
+{
+  "services": [
+    {
+      "gate_id": "gate_acme-travel",
+      "name": "Acme Travel API",
+      "description": "Flight and hotel search with booking",
+      "capability": "flights:search",
+      "pricing": {
+        "base_price_cents": 2,
+        "currency": "USD",
+        "pricing_model": "per_call",
+        "price_locked_until": "2026-12-31T23:59:59Z"
+      },
+      "sla": {
+        "uptime_basis_points": 9990,
+        "max_latency_ms": 200
+      },
+      "platform_fee": {
+        "basis_points": 50,
+        "cap_cents": 10
+      },
+      "catalog_id": "cat_flights_v1",
+      "catalog_version": 3,
+      "catalog_content_hash": "sha256:a3f9e7c2d1b8f7e6a5d4c3b2a1f0e9d8c7b6a5d4",
+      "catalog_signature": "base64_ed25519_signature_over_content_hash...",
+      "signing_key_id": "k1",
+      "passport_required_url": "https://acmetravel.com/api-access"
+    }
+  ],
+  "total": 12,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+### Service Listing Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `gate_id` | `string` | Unique gate identifier |
+| `name` | `string` | Service display name |
+| `description` | `string` | What the service does |
+| `capability` | `string` | The permission key this listing represents |
+| `pricing.base_price_cents` | `number` | Cost per unit in cents. Always an integer. |
+| `pricing.currency` | `string` | ISO 4217 currency code |
+| `pricing.pricing_model` | `string` | `per_call`, `per_minute`, or `subscription` |
+| `pricing.price_locked_until` | `string` | Price is guaranteed fixed until this timestamp |
+| `sla.uptime_basis_points` | `number` | Guaranteed uptime (e.g. `9990` = 99.90%) |
+| `sla.max_latency_ms` | `number` | Guaranteed p99 latency |
+| `platform_fee.basis_points` | `number` | Uniplex protocol fee as basis points |
+| `platform_fee.cap_cents` | `number` | Maximum platform fee per call in cents |
+| `catalog_content_hash` | `string` | SHA-256 hash of the canonical catalog terms |
+| `catalog_signature` | `string` | Ed25519 signature over `catalog_content_hash` |
+| `signing_key_id` | `string` | Which gate signing key was used |
+| `passport_required_url` | `string` | Where to get a passport for this service |
+
+---
+
+## Trustless Verification
+
+The `catalog_signature` in every discovery result is an Ed25519 signature by the service's gate signing key over `catalog_content_hash`. An agent can verify this **without contacting any server**:
+
+```typescript
+import { verify } from '@noble/ed25519';
+import { canonicalize } from 'json-canonicalize';
+import { sha256 } from '@noble/hashes/sha256';
+
+async function verifyDiscoveryResult(service: ServiceListing): Promise<boolean> {
+  // 1. Fetch the gate's signing key (or cache it)
+  const gateInfo = await fetch(`/api/gates/${service.gate_id}/public`);
+  const { signing_keys } = await gateInfo.json();
+  const signingKey = signing_keys.find(k => k.key_id === service.signing_key_id);
+
+  if (!signingKey) return false;
+
+  // 2. Verify the catalog signature
+  const hashBytes = hexToBytes(service.catalog_content_hash.replace('sha256:', ''));
+  const signatureBytes = base64ToBytes(service.catalog_signature);
+  const publicKeyBytes = base64ToBytes(signingKey.public_key);
+
+  return await verify(signatureBytes, hashBytes, publicKeyBytes);
+}
+```
+
+If the signature is invalid, the discovery result has been tampered with — don't trust it.
+
+---
+
+## Examples
+
+### Find all flight search services under $0.01/call
+
+```bash
+curl "https://uniplex.ai/api/discover?capability=flights:search&max_price_cents=1" \
+  -H "Accept: application/json"
+```
+
+### Find research services with 99.9%+ uptime
+
+```bash
+curl "https://uniplex.ai/api/discover?capability=research:*&min_uptime_bp=9990&sort=price_asc"
+```
+
+### Find subscription-priced data services
+
+```bash
+curl "https://uniplex.ai/api/discover?capability=data:*&pricing_model=subscription&limit=5"
+```
+
+---
+
+## When a Service Is Listed
+
+A gate appears in discovery results when:
+1. `is_discoverable` is set to `true` on the gate
+2. The gate has a published catalog with `core:pricing:*` constraints on at least one permission
+3. The catalog is current (not superseded by a newer version)
+
+The discovery index rebuilds automatically every time a discoverable gate publishes a new catalog.
+
+---
+
+## Passport Required URL
+
+Every service listing includes `passport_required_url` — the URL an agent should visit to get credentials for that service. This is the entry point for the self-onboarding flow:
+
+```
+1. Agent discovers service → gets passport_required_url
+2. Agent (or operator) follows URL → issues passport
+3. Passport is pinned to catalog_content_hash at issuance
+4. Agent presents passport to gate → authorized
+```
+
+---
+
+## Making Your Service Discoverable
+
+To list your gate in discovery:
+
+1. Enable discoverability on your gate:
+   ```
+   PATCH /api/gates/[gate_id]
+   { "is_discoverable": true }
+   ```
+
+2. Build a catalog with pricing constraints (at least `core:pricing:per_call_cents`)
+
+3. Publish the catalog:
+   ```
+   POST /api/gates/[gate_id]/catalog/publish
+   ```
+
+Your gate will appear in discovery results within 60 seconds (cache TTL).
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Catalogs" href="/docs/concepts/catalogs" icon="book">
+    How to build and publish a discoverable catalog.
+  </Card>
+  <Card title="Commerce & Billing" href="/docs/concepts/commerce" icon="credit-card">
+    What happens after an agent finds and uses your service.
+  </Card>
+  <Card title="Anonymous Access" href="/docs/concepts/anonymous-access" icon="eye">
+    Allow anonymous discovery even before agents have passports.
+  </Card>
+  <Card title="MCP: discover_services" href="/docs/sdk/mcp-tools" icon="wrench">
+    Use the MCP tool to discover services from Claude.
+  </Card>
+</CardGroup>

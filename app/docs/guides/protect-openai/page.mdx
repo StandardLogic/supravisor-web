@@ -1,0 +1,350 @@
+# Protecting OpenAI Agents
+
+OpenAI's agent tooling gives agents real power — web browsing, code execution, file access, and arbitrary function calls. Supravisor adds a mandatory enforcement layer before any of that executes: which tools can run, under what spending limits, and with a signed audit trail attached.
+
+The pattern is simple. Before executing any tool call, ask the gate whether the agent is allowed to. If yes, proceed. If no, return the denial. Every decision gets a signed attestation.
+
+---
+
+## Installation
+
+<CodeGroup>
+```bash pip
+pip install uniplex openai
+```
+
+```bash npm
+npm install uniplex openai
+```
+</CodeGroup>
+
+---
+
+## The Core Pattern: Check Before Execute
+
+<CodeGroup>
+```python Python
+from uniplex import Agent
+
+agent = Agent.from_env()  # reads UNIPLEX_PASSPORT_KEY
+
+def safe_tool_call(tool_name: str, fn, **kwargs):
+    """
+    Wrap any OpenAI tool call with Supravisor enforcement.
+    Check authorization before the function executes — not after.
+    """
+    decision = agent.authorize(f"tools:{tool_name}")
+    if not decision.allowed:
+        raise PermissionError(
+            f"Tool '{tool_name}' blocked by Supravisor: {decision.reason}"
+        )
+    return fn(**kwargs)
+
+# Usage — clean and consistent
+result = safe_tool_call("web_search", perform_web_search, query="AI news")
+result = safe_tool_call("read_file", read_from_disk, path="/data/report.txt")
+```
+
+```typescript TypeScript
+import { Agent } from 'uniplex';
+
+const agent = await Agent.fromEnv();
+
+async function safeToolCall<T>(
+  toolName: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const decision = await agent.authorize(`tools:${toolName}`);
+  if (!decision.allowed) {
+    throw new Error(`Tool '${toolName}' blocked: ${decision.reason}`);
+  }
+  return fn();
+}
+
+// Usage
+const results = await safeToolCall('web_search', () => performWebSearch(query));
+```
+</CodeGroup>
+
+---
+
+## Integration with the OpenAI Agents SDK
+
+Wrap each tool definition to enforce authorization before execution:
+
+```python
+from openai import OpenAI
+from openai.types.beta.threads import RequiredActionFunctionToolCall
+from uniplex import Agent, Gate, TrustProfile
+import json
+
+agent = Agent.from_env()
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_day": "$30.00",
+        "action_blocklist": "files:delete,payments:send",
+        "max_per_minute": 10
+    }
+)
+client = OpenAI()
+
+# Tool definitions (what OpenAI sees)
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for information",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file by path",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            }
+        }
+    }
+]
+
+# Actual implementations (what runs after the gate allows)
+tool_implementations = {
+    "web_search": lambda query: f"Results for: {query}",
+    "read_file": lambda path: open(path).read(),
+}
+
+def execute_tool_call(tool_call: RequiredActionFunctionToolCall) -> str:
+    """Execute a tool call — Supravisor enforces before execution."""
+    tool_name = tool_call.function.name
+    arguments = json.loads(tool_call.function.arguments)
+    
+    # Ask the gate before doing anything
+    token = agent.generate_token()
+    decision = gate.authorize(token, f"tools:{tool_name}")
+    
+    if not decision.allowed:
+        # Return the denial reason to the model — it can explain to the user
+        return json.dumps({
+            "error": f"Blocked by Supravisor: {decision.reason}",
+            "attestation_id": decision.attestation_id
+        })
+    
+    impl = tool_implementations.get(tool_name)
+    if not impl:
+        return json.dumps({"error": f"Unknown tool: {tool_name}"})
+    
+    result = impl(**arguments)
+    return json.dumps({"result": result})
+```
+
+---
+
+## Integration with the Assistants API
+
+Enforce Supravisor at the `requires_action` step — before submitting any tool output:
+
+```python
+from openai import OpenAI
+from uniplex import Agent, Gate, TrustProfile
+import time, json
+
+client = OpenAI()
+agent = Agent.from_env()
+gate = Gate(profile=TrustProfile.L2, trusted_issuers=["issuer:mycompany.ai"])
+
+def run_assistant_with_supravisor(assistant_id: str, thread_id: str, user_message: str):
+    # Add message to thread
+    client.beta.threads.messages.create(
+        thread_id=thread_id,
+        role="user",
+        content=user_message
+    )
+    
+    run = client.beta.threads.runs.create(
+        thread_id=thread_id,
+        assistant_id=assistant_id
+    )
+    
+    while True:
+        run = client.beta.threads.runs.retrieve(
+            thread_id=thread_id,
+            run_id=run.id
+        )
+        
+        if run.status == "requires_action":
+            tool_outputs = []
+            
+            for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+                # ─── SUPRAVISOR ENFORCEMENT ───────────────────────────────────
+                token = agent.generate_token()
+                decision = gate.authorize(token, f"tools:{tool_call.function.name}")
+                
+                if not decision.allowed:
+                    output = json.dumps({"error": f"Not permitted: {decision.reason}"})
+                else:
+                    arguments = json.loads(tool_call.function.arguments)
+                    output = execute_tool(tool_call.function.name, arguments)
+                # ─────────────────────────────────────────────────────────────
+                
+                tool_outputs.append({
+                    "tool_call_id": tool_call.id,
+                    "output": output
+                })
+            
+            client.beta.threads.runs.submit_tool_outputs(
+                thread_id=thread_id,
+                run_id=run.id,
+                tool_outputs=tool_outputs
+            )
+        
+        elif run.status == "completed":
+            break
+        elif run.status in ["failed", "cancelled", "expired"]:
+            raise Exception(f"Run failed: {run.status}")
+        
+        time.sleep(0.5)
+    
+    messages = client.beta.threads.messages.list(thread_id=thread_id)
+    return messages.data[0].content[0].text.value
+```
+
+---
+
+## TypeScript: Agents SDK Pattern
+
+```typescript
+import OpenAI from 'openai';
+import { Agent, Gate, TrustProfile } from 'uniplex';
+
+const openai = new OpenAI();
+const agent = await Agent.fromEnv();
+const gate = new Gate({
+  profile: TrustProfile.L2,
+  trustedIssuers: ['issuer:mycompany.ai'],
+  constraints: {
+    maxPerDay: '$30.00',
+    actionBlocklist: 'files:delete,payments:send',
+  },
+});
+
+// Map tool names to implementations
+const toolImplementations: Record<string, (args: any) => Promise<string>> = {
+  web_search: async ({ query }: { query: string }) => `Results for: ${query}`,
+  read_file: async ({ path }: { path: string }) => {
+    const fs = await import('fs/promises');
+    return await fs.readFile(path, 'utf-8');
+  },
+};
+
+async function executeWithSupravisor(
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<string> {
+  const token = agent.generateToken();
+  const decision = await gate.authorize(token, `tools:${toolName}`);
+
+  if (!decision.allowed) {
+    return JSON.stringify({
+      error: `Blocked: ${decision.reason}`,
+      attestationId: decision.attestationId,
+    });
+  }
+
+  const impl = toolImplementations[toolName];
+  if (!impl) return JSON.stringify({ error: `Unknown tool: ${toolName}` });
+
+  const result = await impl(args);
+  return JSON.stringify({ result });
+}
+```
+
+---
+
+## Common Gate Configurations
+
+### Spend-Limited GPT Agent
+
+```python
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_action": "$2.00",       # Cap per API call
+        "max_per_day": "$25.00",          # Daily cap
+        "approval_threshold": "$10.00",   # Human approves above $10
+    }
+)
+```
+
+### Read-Only Research Agent
+
+```python
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "read_only": True,
+        "domain_allowlist": "arxiv.org,pubmed.ncbi.nlm.nih.gov,scholar.google.com",
+        "max_per_hour": 50,
+        "no_pii_export": True
+    }
+)
+```
+
+### Rate-Limited Customer Support Agent
+
+```python
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_minute": 5,
+        "action_allowlist": "email:read,email:send,tools:search_kb,tools:create_ticket",
+        "required": "customer_id"    # Every action tagged to a customer
+    }
+)
+```
+
+---
+
+## Reviewing the Session Audit Trail
+
+After a session, pull all decisions:
+
+```python
+from uniplex import UniplexClient
+
+uni = UniplexClient(api_key="uni_xxxx")
+attestations = uni.audit_trail.list(
+    agent_id="openai-research-agent",
+    limit=50
+)
+
+for att in attestations:
+    status = "✅" if att.decision == "allow" else "❌"
+    print(f"{status} {att.action} — {att.reason} ({att.timestamp})")
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Python SDK" href="/docs/sdk/python" icon="python">
+    Full reference for the uniplex Python library.
+  </Card>
+  <Card title="Audit Trail" href="/docs/guides/audit-trail" icon="file-lines">
+    Query, export, and share your agent's decision history.
+  </Card>
+</CardGroup>

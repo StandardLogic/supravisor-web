@@ -1,0 +1,329 @@
+# Custom Constraints
+
+Templates give you a fast start. But when you know exactly what your agent needs — a precise combination of spending limits, allowed domains, rate caps, and approval thresholds — you build it yourself.
+
+This guide covers the most common constraint patterns and how to combine them.
+
+---
+
+## Templates vs. From Scratch
+
+<CardGroup cols={2}>
+  <Card title="Start with a template" icon="grid">
+    Apply a template to your gate, then override individual values. Faster than building from scratch, and harder to misconfigure.
+    
+    ```python
+    gate = Gate.from_template("web-research-agent")
+    gate.constraints["domain_allowlist"] = "myspecificdomain.com"
+    ```
+  </Card>
+  <Card title="Build from scratch" icon="wrench">
+    Start with an empty constraint set if your requirements are unique. Only configure what you explicitly need.
+    
+    ```python
+    gate = Gate(
+        profile=TrustProfile.L2,
+        trusted_issuers=["issuer:me.ai"],
+        constraints={}  # Start empty, add what you need
+    )
+    ```
+  </Card>
+</CardGroup>
+
+---
+
+## The Constraint Config Format
+
+All constraints live in the `constraints` object when creating or updating a gate:
+
+```json
+{
+  "name": "My Custom Gate",
+  "profile": "L2",
+  "trusted_issuers": ["issuer:mycompany.ai"],
+  "constraints": {
+    "max_per_action": "$5.00",
+    "max_per_minute": 10,
+    "max_per_hour": 100,
+    "max_per_day": "$50.00",
+    "max_cumulative": "$500.00",
+    "cumulative_window": "30d",
+    "approval_threshold": "$25.00",
+    "domain_allowlist": "openai.com,anthropic.com",
+    "domain_blocklist": "facebook.com",
+    "action_allowlist": "web:search,web:read",
+    "action_blocklist": "files:delete,payments:send",
+    "read_only": false,
+    "no_pii_export": true,
+    "required": "user_id",
+    "model": "claude-3-5-sonnet",
+    "response_time_ms": "2000",
+    "uptime_basis_points": "9900"
+  }
+}
+```
+
+---
+
+## Common Patterns
+
+### Web Search with Social Media Blocked
+
+```json
+{
+  "constraints": {
+    "domain_blocklist": "facebook.com,twitter.com,instagram.com,tiktok.com,reddit.com",
+    "action_allowlist": ["web:search", "web:read", "web:fetch"],
+    "max_per_hour": 50,
+    "read_only": true
+  }
+}
+```
+
+For maximum security, use an **allowlist** instead:
+
+```json
+{
+  "constraints": {
+    "domain_allowlist": "google.com,bing.com,duckduckgo.com,wikipedia.org,arxiv.org",
+    "action_allowlist": ["web:search", "web:read"],
+    "max_per_hour": 50
+  }
+}
+```
+
+Allowlisting is stricter. Anything not explicitly listed is blocked.
+
+---
+
+### Spend up to $10/Day, Require Approval Above $5
+
+```json
+{
+  "constraints": {
+    "max_per_action": "$10.00",
+    "max_per_day": "$10.00",
+    "approval_threshold": "$5.00"
+  }
+}
+```
+
+How this plays out:
+- Actions costing under $5 → auto-allowed (if other constraints pass)
+- Actions costing $5–$10 → paused for human approval
+- Actions costing over $10 → immediately denied
+
+---
+
+### Read Files, Never Delete or Move Them
+
+```json
+{
+  "constraints": {
+    "action_allowlist": ["files:read", "files:list"],
+    "action_blocklist": ["files:delete", "files:move", "files:rename", "files:write"]
+  }
+}
+```
+
+Or use `read_only` for a simpler block on all write operations across every namespace:
+
+```json
+{
+  "constraints": {
+    "read_only": true
+  }
+}
+```
+
+---
+
+### Strict Domain Allowlist
+
+```json
+{
+  "constraints": {
+    "domain_allowlist": "api.openai.com,api.anthropic.com,api.github.com,api.stripe.com"
+  }
+}
+```
+
+Any domain not in this list is denied — including subdomains. To allow subdomains, list them explicitly:
+
+```json
+{
+  "constraints": {
+    "domain_allowlist": "openai.com,api.openai.com,files.openai.com"
+  }
+}
+```
+
+---
+
+### Rate-Limited API Caller
+
+For agents that call external APIs and need to stay within their rate limits:
+
+```json
+{
+  "constraints": {
+    "max_per_minute": 5,
+    "max_per_hour": 100,
+    "max_per_day": "$20.00",
+    "max_per_action": "$0.50",
+    "domain_allowlist": "api.openai.com,api.anthropic.com"
+  }
+}
+```
+
+---
+
+### High-Security Financial Agent
+
+```json
+{
+  "constraints": {
+    "max_per_action": "$100.00",
+    "max_per_day": "$500.00",
+    "max_cumulative": "$5000.00",
+    "cumulative_window": "30d",
+    "approval_threshold": "$50.00",
+    "no_pii_export": true,
+    "action_blocklist": ["payments:refund", "payments:void", "payments:delete"],
+    "required": "transaction_id",
+    "model": "claude-3-5-sonnet"
+  }
+}
+```
+
+---
+
+## Testing Constraints Before Shipping
+
+Before your agent touches anything real, test your constraint config:
+
+<Steps>
+  <Step title="Open your gate">
+    Navigate to **Gates** → click your gate.
+  </Step>
+  <Step title="Click the Test tab">
+    You'll see the constraint test interface.
+  </Step>
+  <Step title="Paste a passport token">
+    Use the token from your agent's environment.
+  </Step>
+  <Step title="Enter an action">
+    Try something expected to be allowed, then something that should be blocked.
+  </Step>
+  <Step title="Add context for spending/domain constraints">
+    For spending: add a `cost` field to metadata. For domain constraints: add a `resource` field.
+  </Step>
+  <Step title="Click Check">
+    See the full evaluation: which constraints passed, which failed, and the exact reason for the decision.
+  </Step>
+</Steps>
+
+Via API:
+
+```bash
+curl -X POST https://uniplex.ai/api/authorize \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "passport_token": "your_token_here",
+    "action": "payments:send",
+    "resource": "stripe:charge",
+    "gate_id": "gate_def456",
+    "metadata": {
+      "cost": "75.00",
+      "user_id": "usr_123"
+    }
+  }'
+```
+
+---
+
+## Stacking Multiple Constraints
+
+Constraints are AND-evaluated — every single one must pass. Stack as many as you need:
+
+```json
+{
+  "constraints": {
+    "read_only": false,
+    "no_pii_export": true,
+    "domain_allowlist": "api.openai.com",
+    "max_per_minute": 10,
+    "max_per_day": "$25.00",
+    "required": "session_id"
+  }
+}
+```
+
+This gate allows:
+- Any action (not read-only)
+- Only to `api.openai.com`
+- At most 10 times per minute
+- Up to $25/day total
+- Only if `session_id` is in the request metadata
+- But never if the response would contain PII
+
+---
+
+## Per-Issuer Overrides
+
+Different issuers can have different limits on the same gate:
+
+```python
+from uniplex import Gate, TrustProfile
+
+gate = Gate(
+    profile=TrustProfile.L2,
+    issuer_constraints={
+        "issuer:acmecorp.ai": {
+            "max_per_day": "$500.00",  # Production: higher limits
+            "max_per_minute": 50
+        },
+        "issuer:dev.acmecorp.ai": {
+            "max_per_day": "$10.00",   # Dev: conservative limits
+            "max_per_minute": 5
+        }
+    }
+)
+```
+
+---
+
+## Debugging a Denial
+
+When something gets blocked, the denial attestation tells you exactly why:
+
+```python
+decision = gate.authorize(token, "payments:send")
+
+if not decision.allowed:
+    print(f"Denied: {decision.reason}")
+    # "Spending limit exceeded: $47.80 of $50.00 daily limit used"
+    
+    for constraint in decision.constraints_evaluated:
+        if constraint["result"] == "fail":
+            print(f"Failed: {constraint['type']}")
+            print(f"  Limit: {constraint['value']}")
+            print(f"  Current: {constraint['current']}")
+            print(f"  Detail: {constraint['detail']}")
+```
+
+Or check the dashboard: **Activity** → click the red row → expand `constraints_evaluated`.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="All 26 Constraints" href="/docs/concepts/guardrails" icon="sliders">
+    Full reference for every constraint type.
+  </Card>
+  <Card title="Browse Templates" href="/docs/templates/overview" icon="grid">
+    Start from a pre-built config and customize.
+  </Card>
+</CardGroup>

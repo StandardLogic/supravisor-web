@@ -1,0 +1,92 @@
+# Use Case: Data Pipeline
+
+<Note>
+  **The moment:** Your pipeline runs unattended around the clock — and you know it can't blow the budget, touch personal data, or hammer an API, no matter what.
+</Note>
+
+A scheduled data pipeline agent runs continuously with no human in the loop. The pipeline team needs rate limiting (don't hammer APIs), cost caps (don't blow the budget), and PII protection (never export personal data).
+
+---
+
+## Constraint Configuration
+
+```json
+{
+  "core:rate:max_per_minute": 100,
+  "core:rate:max_per_hour": 5000,
+  "core:cost:max_per_action": 1000,
+  "core:cost:max_cumulative": 20000,
+  "core:cost:cumulative_window": "daily",
+  "core:data:no_pii_export": true
+}
+```
+
+**`core:data:no_pii_export`** — the CEL engine inspects the action metadata for PII signals. If detected, BLOCK. This is the `output_hold`-adjacent evaluator: the pipeline agent cannot export rows containing PII fields.
+
+---
+
+## Testing with Dry-Run
+
+Before deploying a constraint config change, the team tests it:
+
+```bash
+POST /api/authorize/dry-run
+{
+  "passport_id": "uni_pipeline-prod",
+  "action": "data:export",
+  "cost_cents": 500,
+  "metadata": { "contains_pii": true }
+}
+```
+
+**Response:**
+```json
+{
+  "final_decision": "BLOCK",
+  "evaluator_results": [
+    { "evaluator": "core:data:no_pii_export", "decision": "BLOCK",
+      "reason": "PII detected in metadata" }
+  ]
+}
+```
+
+Dry-run: nothing recorded, no state changes. Safe to run in CI.
+
+---
+
+## CI Integration
+
+The pipeline team adds dry-run assertions to their CI pipeline:
+
+```bash
+# Assert that the pipeline CAN export non-PII data
+result=$(curl -s -X POST https://uniplex.ai/api/authorize/dry-run \
+  -H "Authorization: Bearer $UNIPLEX_API_KEY" \
+  -d '{ "passport_id": "uni_pipeline-ci", "action": "data:export", "cost_cents": 100 }')
+
+decision=$(echo $result | jq -r '.final_decision')
+[ "$decision" = "PERMIT" ] || (echo "Pipeline policy regression!" && exit 1)
+```
+
+---
+
+## Rate Window Behavior
+
+The state engine tracks calls per window. Windows reset at UTC boundaries:
+- `daily` → midnight UTC
+- `weekly` → Monday 00:00 UTC
+- `monthly` → 1st of month UTC
+
+If the pipeline exceeds `max_per_minute`, the gate returns BLOCK immediately. The pipeline backs off and retries after the window resets (60 seconds).
+
+---
+
+## Key Evaluators
+
+| Evaluator | Sequence | Purpose |
+|-----------|----------|---------|
+| `core:rate:max_per_minute` | 30 | Anti-hammering |
+| `core:rate:max_per_hour` | 31 | Hourly budget |
+| `core:cost:max_per_action` | 40 | Single-action cap |
+| `core:cost:max_cumulative` | 41 | Daily budget |
+| `core:data:no_pii_export` | 61 | PII protection |

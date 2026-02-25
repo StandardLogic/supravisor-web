@@ -104,7 +104,7 @@ export function LandingPage() {
               Get Started Free
             </Link>
             <Link
-              href="https://uniplex.ai/docs"
+              href="/docs"
               className="w-full sm:w-auto font-mono font-medium py-3 px-8 rounded-lg transition-colors text-lg border"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}
             >

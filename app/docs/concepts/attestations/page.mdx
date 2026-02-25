@@ -1,0 +1,253 @@
+# Attestations
+
+When a gate makes a decision, it doesn't just allow or deny. It signs a receipt.
+
+Not a log. Not a screenshot. A cryptographically signed record that includes who asked, what they asked for, which gate evaluated the request, every constraint that was checked, and the outcome. Signed by the gate's private key the moment it was made. Unalterable after the fact.
+
+That's an attestation. You can hand it to an auditor, a lawyer, or a skeptical board member. You can verify it yourself without trusting Supravisor's word. And you can share it publicly without exposing your API keys or internal configuration.
+
+---
+
+## Why It Can't Be Faked
+
+The attestation is signed with the gate's Ed25519 private key at the moment of the decision. The signature covers every field in the document. Change anything — the decision, the timestamp, the agent ID, a single constraint value — and the signature verification fails.
+
+This means:
+- You can share an attestation with anyone and they can verify it independently
+- Supravisor cannot retroactively alter what was or wasn't allowed
+- Your agent cannot dispute its own action history
+- Third parties can verify the record without trusting Supravisor's word for it
+
+---
+
+## What's Inside an Attestation
+
+```json
+{
+  "attestation_id": "att_xyz789",
+  "decision": "allow",
+  "reason": "All constraints satisfied",
+  "passport_id": "uni_abc123",
+  "agent_id": "my-research-agent",
+  "agent_name": "Research Bot",
+  "gate_id": "gate_def456",
+  "gate_name": "Research Gate",
+  "action": "mcp:search",
+  "resource": "web:google",
+  "timestamp": "2026-02-24T10:30:00Z",
+  "constraints_evaluated": [
+    {
+      "type": "max_per_day",
+      "value": "$50.00",
+      "current": "$12.40",
+      "result": "pass",
+      "detail": "Daily spend $12.40 of $50.00 limit"
+    },
+    {
+      "type": "max_per_minute",
+      "value": "10",
+      "current": "3",
+      "result": "pass",
+      "detail": "3 actions in current minute window"
+    },
+    {
+      "type": "domain_allowlist",
+      "value": "openai.com,anthropic.com,google.com",
+      "current": "google.com",
+      "result": "pass",
+      "detail": "Target domain google.com is in allowlist"
+    }
+  ],
+  "issuer_id": "issuer:mycompany.ai",
+  "trust_profile": "L2",
+  "nonce": "req_nonce_abc",
+  "gate_signature": "Ed25519-base64_encoded_signature_over_all_fields..."
+}
+```
+
+| Field | What it tells you |
+|-------|------------------|
+| `attestation_id` | Globally unique ID, prefixed with `att_` |
+| `decision` | `"allow"` or `"deny"` — no ambiguity |
+| `reason` | Plain English explanation — always present, even on allow |
+| `passport_id` | The passport that was presented |
+| `agent_id` | The agent slug for filtering in the audit trail |
+| `gate_id` | Which gate made this decision |
+| `action` | The specific action that was requested |
+| `resource` | What target resource the action targeted |
+| `timestamp` | ISO 8601 UTC — when the decision was made |
+| `constraints_evaluated` | Every constraint checked, with current values and pass/fail |
+| `trust_profile` | L1, L2, or L3 |
+| `gate_signature` | Ed25519 signature covering every field above |
+
+### What a Denial Looks Like
+
+```json
+{
+  "attestation_id": "att_abc456",
+  "decision": "deny",
+  "reason": "Spending limit exceeded: $48.75 of $50.00 daily limit used",
+  "passport_id": "uni_abc123",
+  "agent_id": "my-research-agent",
+  "gate_id": "gate_def456",
+  "action": "payments:send",
+  "resource": "stripe:charge_5.00",
+  "timestamp": "2026-02-24T22:45:00Z",
+  "constraints_evaluated": [
+    {
+      "type": "max_per_day",
+      "value": "$50.00",
+      "current": "$48.75",
+      "result": "fail",
+      "detail": "Would exceed daily limit: $48.75 + $5.00 = $53.75 > $50.00"
+    }
+  ],
+  "gate_signature": "Ed25519-base64..."
+}
+```
+
+Denials are just as useful as allows. They tell you exactly why the action was blocked, with the exact current value that triggered the limit.
+
+---
+
+## Finding Attestations in the Dashboard
+
+### Activity Tab
+
+Live stream of recent decisions, most recent first. Green rows = allowed. Red rows = denied. Click any row to see the full attestation with constraint breakdown.
+
+**Best for:** Real-time monitoring, spotting what just happened.
+
+### Audit Trail Tab
+
+Complete queryable history. Filter by agent, gate, decision, time range, or action. Export as JSON or CSV. Share individual attestations via public URL.
+
+**Best for:** Compliance exports, debugging specific incidents, client reporting.
+
+---
+
+## Querying via API
+
+```bash
+# Last 50 decisions
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G --data-urlencode "limit=50"
+
+# All denials for a specific agent
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "agent_id=my-research-agent" \
+  --data-urlencode "decision=deny" \
+  --data-urlencode "limit=50"
+
+# Time-ranged: everything in February
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "from=2026-02-01T00:00:00Z" \
+  --data-urlencode "to=2026-02-28T23:59:59Z"
+
+# Get a single attestation
+curl https://uniplex.ai/api/audit-trail/att_xyz789 \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+---
+
+## Sharing Attestations as Public Proof
+
+Generate a shareable URL for any attestation. Anyone with the link can view the record and verify the signature — no Supravisor account needed.
+
+```bash
+curl -X POST https://uniplex.ai/api/audit-trail/att_xyz789/share \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+```json
+{
+  "share_url": "https://uniplex.ai/proof/att_xyz789_sharetoken",
+  "expires_at": "2026-03-24T10:30:00Z"
+}
+```
+
+**The public URL shows:** decision, action, timestamp, constraints evaluated, agent name, gate signature for independent verification.
+
+**The public URL hides:** your API keys, internal gate configuration, issuer private keys, sensitive metadata.
+
+<Tip>
+  Share attestation URLs with clients as proof that their agent operated within authorized scope. The cryptographic signature lets them verify the record independently — without trusting your word.
+</Tip>
+
+---
+
+## Real-World Use Cases
+
+### Compliance Audits
+
+Regulators need evidence that automated systems operated within approved limits. Export attestations for any time period as signed JSON, hand it over. Each record's signature proves it's unaltered.
+
+```bash
+# Export Q1 2026 for a compliance audit
+curl "https://uniplex.ai/api/audit-trail/export?format=json&from=2026-01-01&to=2026-03-31" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -o q1-2026-compliance-export.json
+```
+
+### Client Reporting
+
+Running agents on behalf of clients? Share attestation URLs to prove the agent only did what was authorized, stayed within budget, and never accessed restricted data.
+
+### Debugging Agent Behavior
+
+Agent got blocked and you don't know why? Find the denial attestation. The `constraints_evaluated` array tells you exactly which constraint failed, the current value that triggered it, and the exact threshold.
+
+### Dispute Resolution
+
+Someone disputes an agent action? Pull the attestation. It shows the decision (allow or deny), which constraints were checked, the exact timestamp, and a signature that proves the record hasn't been touched since it was created.
+
+---
+
+## Verifying a Signature Without Trusting Supravisor
+
+You can verify any attestation's signature independently using the gate's public key:
+
+```python
+import json
+import base64
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+def verify_attestation(attestation: dict, gate_public_key_b64: str) -> bool:
+    """
+    Verify an attestation signature without relying on Supravisor's API.
+    Get your gate's public key from: Dashboard → Gates → your gate → Export Public Key
+    """
+    signature_b64 = attestation.pop("gate_signature")
+    signature = base64.b64decode(signature_b64)
+    
+    # Canonical JSON — sorted keys, no whitespace — same format the gate used when signing
+    payload = json.dumps(attestation, sort_keys=True, separators=(',', ':')).encode()
+    
+    public_key_bytes = base64.b64decode(gate_public_key_b64)
+    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+    
+    try:
+        public_key.verify(signature, payload)
+        return True  # Signature is valid — record hasn't been tampered with
+    except Exception:
+        return False  # Signature failed — someone altered this record
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Audit Trail Guide" href="/docs/guides/audit-trail" icon="file-lines">
+    Filter, export, and share your agent's full decision history.
+  </Card>
+  <Card title="Audit Trail API" href="/docs/api-reference/audit-trail" icon="code">
+    Full REST reference for querying attestations.
+  </Card>
+</CardGroup>

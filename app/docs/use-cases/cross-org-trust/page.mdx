@@ -1,0 +1,113 @@
+# Use Case: Cross-Organization Trust
+
+<Note>
+  **The moment:** Two organizations sharing agent access — with cryptographic proof on both sides, and no central authority anyone has to trust.
+</Note>
+
+Org A's agents need to access Org B's APIs. Neither trusts the other's infrastructure. They trust Ed25519 cryptography.
+
+---
+
+## Setup
+
+**Org A creates an issuer** and shares its public key out-of-band (email, Slack, whatever):
+
+```
+Issuer ID:  issuer:org-a.example.com
+Public Key: MCowBQYDK2VwAyEA7Hs9...
+```
+
+**Org B adds Org A as a trusted issuer** on their gate:
+
+```bash
+# Add trusted issuer
+POST /trusted-issuers
+{
+  "issuer_id": "issuer:org-a.example.com",
+  "name": "Org A",
+  "public_key": "MCowBQYDK2VwAyEA7Hs9..."
+}
+
+# Attach to L2 gate
+POST /api/gates/gate_org-b-api/trusted-issuers
+{ "trusted_issuer_id": "uuid-of-org-a-issuer" }
+```
+
+Now Org B's L2 gate will accept passports signed by Org A's issuer.
+
+---
+
+## Agent Access Flow
+
+Org A issues a passport for their agent, signed with `issuer:org-a.example.com`:
+
+```bash
+POST /api/gates/gate_org-b-api/passports
+{
+  "issuer_id": "issuer:org-a.example.com",
+  "agent_id": "org-a-agent-01",
+  "permissions": ["analytics:read", "reports:export"]
+}
+```
+
+The agent presents this passport to Org B's gate:
+
+```bash
+POST /api/gates/gate_org-b-api/check
+{
+  "passport_json": { ... },
+  "action": "analytics:read"
+}
+```
+
+**Gate verification:**
+1. Parse `issuer_id: issuer:org-a.example.com`
+2. Look up public key from trusted issuers (tenant-scoped to Org B)
+3. Verify Ed25519 signature
+4. → `decision: allow`
+
+---
+
+## Billing Between Orgs
+
+Both orgs hold signed consumption attestations for every call:
+
+```bash
+POST /api/consume
+{
+  "passport_id": "uni_agent-01",
+  "gate_id": "gate_org-b-api",
+  "action": "reports:export",
+  "outcome": "success",
+  "agent_pop": { ... }
+}
+```
+
+**Response:** gate-signed attestation with `gate_signature`
+
+At month end, Org B generates a settlement. The invoice is backed by Ed25519-verified consumption records. If Org A disputes a charge, both sides have signed receipts. There's no arbitration — the math settles it.
+
+---
+
+## Revoking Trust
+
+If Org A is compromised:
+
+```bash
+PATCH /trusted-issuers/[id]
+{ "revoked_at": "2026-02-24T15:00:00Z" }
+```
+
+All of Org A's passports immediately fail at Org B's gate — the issuer's public key is gone from the trusted list. No passport-by-passport revocation needed.
+
+---
+
+## Security Properties
+
+| Invariant | Enforced By |
+|-----------|------------|
+| Only Org A's issuer key signs valid passports | Ed25519 math |
+| Org B can't forge Org A passports | They don't have Org A's private key |
+| Org A can't forge billing records | Gate signs with its own key |
+| Neither can alter a signed attestation | Ed25519 + RFC 8785 canonicalization |
+| Trust revocation is instant | Public key removed → all sigs fail |

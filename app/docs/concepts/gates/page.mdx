@@ -1,0 +1,309 @@
+# Gates
+
+A gate is a bouncer. Not the kind who just eyeballs you at the door — the kind who checks your ID, cross-references the guest list, and runs a security camera that cryptographically signs every entry in an unforgeable ledger.
+
+Every time an agent wants to do something — search the web, call an API, spend money, modify a file — it presents its passport at the gate. The gate verifies the signature, checks the issuer, evaluates every guardrail rule, and makes a decision: allow or deny. Then it signs a tamper-proof record of that decision.
+
+The whole process takes under a millisecond. No network call.
+
+---
+
+## What a Gate Actually Does
+
+```
+Agent Request
+     │
+     ▼
+┌─────────────────────────────────────────┐
+│  Gate                                   │
+│  1. Parse passport token                │
+│  2. Verify Ed25519 signature            │
+│  3. Check issuer is trusted             │
+│  4. Check passport hasn't expired       │
+│  5. Check passport isn't revoked (L3)   │
+│  6. Verify permissions include action   │
+│  7. Evaluate guardrail constraints      │
+│  8. Sign attestation record             │
+└─────────────────────────────────────────┘
+     │
+     ├── ALLOW → proceed + signed attestation
+     └── DENY  → clear reason + signed attestation
+```
+
+Steps 1–7 require no network call. The Ed25519 signature verification, permission checks, and constraint evaluation all run in-process. Only step 5 (L3 live revocation check) makes a network call, and that's cached aggressively.
+
+Gate latency: **under 1ms**, regardless of network conditions.
+
+---
+
+## Anonymous Access: The Hotel Lobby
+
+Not every visitor needs a key card. Gates support anonymous access — you decide how open your lobby is.
+
+Think of it like a hotel. The lobby is open to anyone. But the guest rooms? You need a key card. No key card? The front desk tells you exactly how to get one.
+
+A gate configured with anonymous access can let unauthenticated agents browse a service catalog, read public information, or discover what's available — while still requiring a passport for anything that matters. Agents without passports get a clear message: here's how to get one.
+
+[Configure anonymous access →](/docs/concepts/anonymous-access)
+
+---
+
+## Security Levels
+
+Every gate runs at one of three trust profiles. Match it to your risk tolerance.
+
+| Level | Name | Replay Protection | Revocation Check | Best For |
+|-------|------|-------------------|-----------------|---------|
+| L1 | Baseline | ❌ | ❌ | Local dev, prototyping |
+| L2 | Standard | ✅ (nonce) | ✅ (cached) | Production, external services |
+| L3 | Strict | ✅ (proof-of-possession) | ✅ (live) | Finance, healthcare, high-stakes |
+
+<Card title="Deep dive: Trust Profiles" href="/docs/concepts/trust-profiles" icon="layers">
+  Full comparison of L1, L2, and L3 with code examples.
+</Card>
+
+---
+
+## Configuring a Gate
+
+A gate has four things to configure:
+
+### 1. Trusted Issuers
+Which signing authorities do you trust? Any passport not signed by an issuer on this list gets rejected before anything else is checked.
+
+```json
+{
+  "trusted_issuers": ["issuer:acmecorp.ai", "issuer:dev.acmecorp.ai"]
+}
+```
+
+### 2. Required Permissions
+Optional. If set, any passport presented at this gate must include these permissions. Useful for ensuring only purpose-built agents reach this gate.
+
+```json
+{
+  "required_permissions": ["api:read"]
+}
+```
+
+### 3. Guardrail Constraints
+The rulebook — 26 constraint types covering spending, rate limits, domain access, PII protection, approval workflows, and more.
+
+```json
+{
+  "constraints": {
+    "max_per_day": "$50.00",
+    "domain_allowlist": "openai.com,anthropic.com",
+    "read_only": false,
+    "max_per_minute": 10
+  }
+}
+```
+
+[See all 26 constraint types →](/docs/concepts/guardrails)
+
+### 4. Security Profile
+
+```json
+{
+  "profile": "L2"
+}
+```
+
+---
+
+## Every Decision Has a Record
+
+Every gate check produces a **Decision** with three components:
+
+1. **`allowed`** — boolean
+2. **`reason`** — plain English explanation, always present whether allowed or denied
+3. **`attestation_id`** — the ID of the signed, tamper-proof record
+
+```json
+{
+  "allowed": false,
+  "reason": "Spending limit exceeded: $47.80 of $50.00 daily limit used",
+  "attestation_id": "att_xyz789",
+  "checked_at": "2026-02-24T15:30:00Z"
+}
+```
+
+That attestation is signed by the gate's private key and cannot be altered. [Learn more about Attestations →](/docs/concepts/attestations)
+
+---
+
+## Creating a Gate
+
+<Steps>
+  <Step title="Open Gates">
+    In the Supravisor dashboard, click **Gates** in the sidebar.
+  </Step>
+  <Step title="Click New Gate">
+    Click **+ New Gate**. Give it a name that reflects what it protects — "Research API Gate" or "Email Service Gate."
+  </Step>
+  <Step title="Select trusted issuers">
+    Add one or more issuer IDs. Only passports signed by these issuers will be accepted.
+  </Step>
+  <Step title="Choose a security level">
+    L1 for dev, L2 for production, L3 for high-stakes. When in doubt, use L2.
+  </Step>
+  <Step title="Configure guardrails">
+    Apply a template for a fast start, or configure constraints manually.
+
+    [Browse 30 templates →](/docs/templates/overview)
+  </Step>
+  <Step title="Save and note the Gate ID">
+    Your gate gets an ID like `gate_def456`. Use this when referencing the gate in code or API calls.
+  </Step>
+</Steps>
+
+---
+
+## Protecting an API Endpoint
+
+### Python (Flask)
+
+```python
+from flask import Flask, request, jsonify
+from uniplex import Gate, TrustProfile
+
+app = Flask(__name__)
+
+# Initialize the gate once at startup — verification logic cached in memory
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_minute": 30,  # Rate limit
+        "read_only": True       # Block all write operations
+    }
+)
+
+@app.route("/api/protected")
+def protected():
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        return jsonify({"error": "No authorization token provided"}), 401
+
+    decision = gate.authorize(token, "api:read")
+
+    if not decision.allowed:
+        # Attestation is created even for denials — your audit trail is complete
+        return jsonify({
+            "error": decision.reason,
+            "attestation_id": decision.attestation_id
+        }), 403
+
+    # Agent is authorized — proceed
+    return jsonify({"data": "protected content"})
+```
+
+### TypeScript (Express)
+
+```typescript
+import express from 'express';
+import { Gate, TrustProfile } from 'uniplex';
+
+const app = express();
+
+// Initialize once at startup
+const gate = new Gate({
+  profile: TrustProfile.L2,
+  trustedIssuers: ['issuer:mycompany.ai'],
+  constraints: {
+    maxPerMinute: 30,  // Rate limit
+    readOnly: true,    // Block all write operations
+  },
+});
+
+app.get('/api/protected', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({ error: 'No authorization token provided' });
+  }
+
+  const decision = await gate.authorize(token, 'api:read');
+
+  if (!decision.allowed) {
+    return res.status(403).json({
+      error: decision.reason,
+      attestationId: decision.attestationId,
+    });
+  }
+
+  res.json({ data: 'protected content' });
+});
+```
+
+### Python (FastAPI)
+
+```python
+from fastapi import FastAPI, HTTPException, Depends, Header
+from uniplex import Gate, TrustProfile
+from typing import Optional
+
+app = FastAPI()
+
+gate = Gate(profile=TrustProfile.L2, trusted_issuers=["issuer:mycompany.ai"])
+
+async def verify_agent(authorization: Optional[str] = Header(None)):
+    """Dependency that verifies the agent passport before handling any request."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+    token = authorization.replace("Bearer ", "")
+    decision = gate.authorize(token, "api:read")
+    if not decision.allowed:
+        raise HTTPException(status_code=403, detail=decision.reason)
+    return decision
+
+@app.get("/api/protected")
+async def protected(decision=Depends(verify_agent)):
+    return {"data": "protected content", "attestation": decision.attestation_id}
+```
+
+---
+
+## Using a Gate by ID (Managed Config)
+
+Reference a gate by its ID to use the configuration you've set in the dashboard:
+
+```python
+from uniplex import Gate
+
+# Pull the managed gate config — constraints and trusted issuers come from the dashboard
+gate = Gate(gate_id="gate_def456", api_key="uni_xxxx")
+decision = gate.authorize(passport_token, "api:read")
+```
+
+Or via REST:
+
+```bash
+curl -X POST https://uniplex.ai/api/authorize \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "passport_token": "base64_passport_here",
+    "action": "api:read",
+    "gate_id": "gate_def456"
+  }'
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Guardrails" href="/docs/concepts/guardrails" icon="sliders">
+    All 26 constraint types and how to combine them.
+  </Card>
+  <Card title="Trust Profiles" href="/docs/concepts/trust-profiles" icon="layers">
+    L1, L2, and L3 — choose the right security level.
+  </Card>
+  <Card title="Anonymous Access" href="/docs/concepts/anonymous-access" icon="door-open">
+    Configure your gate's public lobby.
+  </Card>
+  <Card title="Gates API" href="/docs/api-reference/gates" icon="code">
+    Full REST reference for gate management.
+  </Card>
+</CardGroup>

@@ -1,0 +1,283 @@
+# Passports
+
+## Passports Work on Their Own
+
+No gate. No backend. No infrastructure.
+
+Issue a passport and your agent has policy enforcement immediately — in-process, with no network call. The SDK enforces the passport's permissions right there:
+
+```python
+from uniplex import Passport
+
+passport = Passport.load("passport.json")
+result = passport.check(action="files:write")
+
+if result.allowed:
+    proceed_with_write()
+else:
+    print(f"Blocked: {result.reason}")  # "Permission 'files:write' not granted"
+```
+
+That's it. No gate ID. No account. The passport is self-contained enforcement. Add a gate later when you need remote verification and a managed audit trail.
+
+---
+
+## What a Passport Is
+
+A passport is your agent's identity. A driver's license and an insurance policy, fused into a single tamper-proof document.
+
+The driver's license part: it proves who the agent is and that a trusted authority authorized it. The insurance policy part: it defines exactly what the agent is covered to do — and makes anything outside that scope impossible to claim.
+
+---
+
+## What's Inside a Passport
+
+Every passport is a JSON document with two parts: the **payload** (the claims) and the **signature** (the proof).
+
+```json
+{
+  "payload": {
+    "passport_id": "uni_abc123",
+    "agent_id": "my-research-agent",
+    "agent_name": "Research Bot",
+    "issuer_id": "issuer:mycompany.ai",
+    "permissions": ["web:search", "mcp:read"],
+    "public_key": "base64_encoded_ed25519_public_key...",
+    "issued_at": "2026-02-24T00:00:00Z",
+    "expires_at": "2027-02-24T00:00:00Z"
+  },
+  "signature": "Ed25519-base64_encoded_signature_over_payload..."
+}
+```
+
+| Field | What it means |
+|-------|---------------|
+| `passport_id` | Globally unique ID, always starts with `uni_` |
+| `agent_id` | Your short label for this agent — shows up in audit logs |
+| `agent_name` | The human-readable name you see in the dashboard |
+| `issuer_id` | The authority that signed this passport — your organization |
+| `permissions` | What actions this agent is allowed to perform |
+| `public_key` | The agent's public key (used for L3 proof-of-possession) |
+| `issued_at` | When this passport was created |
+| `expires_at` | When this passport expires — after this, every gate denies it |
+| `signature` | Ed25519 signature over the payload — mathematically unforgeable |
+
+Because it's signed with Ed25519, the signature is verifiable by anyone who has the issuer's public key. No central server needed. Verification happens locally, instantly.
+
+---
+
+## Passport-Only Enforcement — No Gate Needed
+
+Here's the thing most people miss: **you don't need a gate to get enforcement.**
+
+Issue a passport, load it into the SDK, and call `agent.authorize()`. The SDK enforces the passport's permissions right there — no network call, no gate ID, no account.
+
+<CodeGroup>
+```python Python
+from uniplex import Agent
+
+# Create a self-signed passport with L1 trust — no account needed
+agent = Agent.create("my-agent", permissions=["web:search", "mcp:read"])
+
+# Enforce permissions immediately
+decision = agent.authorize("web:search")
+print(decision.allowed)   # True — it's in the permissions
+
+decision = agent.authorize("files:delete")
+print(decision.allowed)   # False — not in the permissions
+print(decision.reason)    # "Permission 'files:delete' not granted"
+
+# Export the passport to reuse it later
+passport_json = agent.export_passport()
+```
+
+```typescript TypeScript
+import { Agent } from 'uniplex';
+
+// Create a self-signed passport — no account needed
+const agent = await Agent.create('my-agent', {
+  permissions: ['web:search', 'mcp:read'],
+});
+
+// Enforce permissions immediately
+const decision = await agent.authorize('web:search');
+console.log(decision.allowed);  // true
+
+const blocked = await agent.authorize('files:delete');
+console.log(blocked.allowed);  // false
+console.log(blocked.reason);   // "Permission 'files:delete' not granted"
+
+const passportJson = agent.exportPassport(); // Store and reuse
+```
+</CodeGroup>
+
+Self-issued passports use L1 trust — perfect for local development, quick experiments, and single-machine deployments. When you're ready for remote verification and a full audit trail, add a gate.
+
+<Note>
+  Self-issued passports are only accepted by L1 gates. For production — where you need issuer verification and revocation — issue passports through the dashboard and use an L2 gate.
+</Note>
+
+---
+
+## What Agents Can Do: Permission Namespaces
+
+Permissions follow a `namespace:action` pattern. The `*` wildcard grants everything within a namespace.
+
+| Namespace | Examples | What it covers |
+|-----------|---------|----------------|
+| `mcp:*` | `mcp:read`, `mcp:write`, `mcp:search` | MCP tool calls |
+| `web:*` | `web:search`, `web:read`, `web:fetch` | Web browsing and fetching |
+| `email:*` | `email:read`, `email:send`, `email:delete` | Email access |
+| `files:*` | `files:read`, `files:write`, `files:delete` | File system operations |
+| `payments:*` | `payments:read`, `payments:send`, `payments:refund` | Payment operations |
+| `api:*` | `api:read`, `api:write`, `api:admin` | Generic API calls |
+| `tools:*` | `tools:search`, `tools:execute` | Tool use (OpenAI/LangChain style) |
+| `*` | (everything) | Full access — only for fully trusted, isolated agents |
+
+<Warning>
+  Grant the minimum permissions your agent actually needs. A research agent shouldn't have `payments:send` or `files:delete`. Specific namespaces over `*`, especially in production.
+</Warning>
+
+---
+
+## The Private Key
+
+When you issue a passport through the dashboard, Supravisor generates an **Ed25519 keypair** in your browser:
+
+- The **public key** is embedded in the passport and stored by Supravisor
+- The **private key** is shown to you **once** and never stored anywhere by Supravisor
+
+The private key is what your agent uses to prove it's the legitimate holder of a passport. Lose it and the passport becomes unusable. Share it and someone else can act as your agent.
+
+### Loading the Key
+
+The standard pattern — load from an environment variable:
+
+```bash
+export UNIPLEX_PASSPORT_KEY="ed25519_private_key_base64_here"
+```
+
+Or in a `.env` file:
+```
+UNIPLEX_PASSPORT_KEY=ed25519_private_key_base64_here
+```
+
+The SDK reads this automatically when you call `Agent.from_env()`.
+
+---
+
+## Loading an Existing Passport
+
+<CodeGroup>
+```python Python
+import os
+from uniplex import Agent
+
+# Load from environment variable (recommended)
+agent = Agent.from_env()
+
+# Load explicitly
+agent = Agent(
+    passport_id="uni_abc123",
+    private_key=os.environ["MY_AGENT_KEY"]
+)
+
+# Load from previously exported JSON
+agent = Agent.from_json(passport_json_string)
+
+# Inspect the passport
+print(agent.passport_id)  # "uni_abc123"
+print(agent.expires_at)   # datetime(2027, 2, 24, 0, 0, 0)
+print(agent.permissions)  # ["web:search", "mcp:read"]
+```
+
+```typescript TypeScript
+import { Agent } from 'uniplex';
+
+// Load from environment variable (recommended)
+const agent = await Agent.fromEnv();
+
+// Load explicitly
+const agent = new Agent({
+  passportId: 'uni_abc123',
+  privateKey: process.env.MY_AGENT_KEY!,
+});
+
+// Inspect the passport
+console.log(agent.passportId);  // "uni_abc123"
+console.log(agent.expiresAt);   // Date object
+console.log(agent.permissions); // ["web:search", "mcp:read"]
+```
+</CodeGroup>
+
+---
+
+## Expiration and Renewal
+
+Passports expire. After `expires_at`, every gate check returns denied. Your agent needs a fresh passport before then.
+
+**Recommended expiry by use case:**
+
+| Use Case | Suggested TTL |
+|----------|--------------|
+| Local development | 365 days |
+| Internal tools | 180 days |
+| Production agents | 90 days |
+| High-security agents | 30 days |
+| One-time automation | 1–7 days |
+
+**Automated rotation — agents can renew their own credentials:**
+
+```python
+from uniplex import Agent, UniplexClient
+from datetime import datetime, timedelta
+import os
+
+client = UniplexClient(api_key=os.environ["UNIPLEX_API_KEY"])
+agent = Agent.from_env()
+
+# Rotate 7 days before expiry — run this on a schedule
+days_until_expiry = (agent.expires_at - datetime.utcnow()).days
+if days_until_expiry < 7:
+    new_passport = client.passports.issue(
+        agent_id=agent.agent_id,
+        permissions=agent.permissions,
+        expires_in="90d"
+    )
+    # Store new key in secrets manager, revoke old passport
+    print(f"Rotated: {agent.passport_id} → {new_passport.passport_id}")
+```
+
+---
+
+## Revocation
+
+Need to shut down an agent immediately? Revocation is instant.
+
+```bash
+curl -X DELETE https://uniplex.ai/api/passports/uni_abc123 \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+The moment you revoke a passport, every gate that checks it will deny it — even if it hasn't expired. No waiting. No grace period. Gone.
+
+Revocation is enforced at the gate level for L2/L3 profiles. At L1, revocation is not enforced — L1 is for local development only.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Add a Gate" href="/docs/concepts/gates" icon="shield">
+    Remote verification, per-gate rules, and a full audit trail.
+  </Card>
+  <Card title="Passports API" href="/docs/api-reference/passports" icon="code">
+    Full REST reference for issuing and revoking passports.
+  </Card>
+  <Card title="Trust Profiles" href="/docs/concepts/trust-profiles" icon="layers">
+    Choose the right security level: L1, L2, or L3.
+  </Card>
+  <Card title="Python SDK" href="/docs/sdk/python" icon="python">
+    Full SDK reference for the Python uniplex library.
+  </Card>
+</CardGroup>

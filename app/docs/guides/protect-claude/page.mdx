@@ -1,0 +1,255 @@
+# Protecting Claude and Claude Code
+
+Claude is one of the most capable AI assistants available. That capability is exactly why it needs guardrails.
+
+A Claude session with file system access can read, modify, and delete files. Claude Code can run shell commands. Claude with web access can make API calls, reach any domain, and accumulate costs without any built-in cap. There's nothing stopping it from doing too much — unless you add a layer that does.
+
+Supravisor gives you: domain allowlists, spending caps, read-only modes, rate limits, and a signed audit trail of every decision. Every action Claude tries to take runs through the gate first.
+
+---
+
+## What You're Protecting Against
+
+| Risk | Without Supravisor | With Supravisor |
+|------|-------------------|-----------------|
+| File system access | Can read, write, delete anything | Scoped to allowed actions, read-only mode available |
+| External API calls | No domain restrictions | Domain allowlist/blocklist enforced |
+| Spending | API costs accumulate silently | Per-action, per-day, lifetime caps |
+| External services | Any integration it can reach | Action allowlist enforced |
+| Audit | Conversation history only | Signed attestation for every decision |
+| Credential management | Keys in context or environment | Scoped passports, revocable instantly |
+
+---
+
+## Option A: MCP Server (Recommended — Easiest)
+
+Claude speaks MCP natively. The fastest integration is to connect Supravisor as an MCP server — Claude then handles its own credential checking for every tool call.
+
+### Step 1: Start the MCP Server
+
+```bash
+npx uniplex-mcp-manage
+```
+
+This opens a browser for one-time OAuth 2.0 authorization. Once complete, the server runs on `localhost:3456`.
+
+### Step 2: Add to Claude's MCP Config
+
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "supravisor": {
+      "command": "npx",
+      "args": ["uniplex-mcp-manage"],
+      "env": {
+        "UNIPLEX_PASSPORT_KEY": "your_passport_key_here",
+        "UNIPLEX_GATE_ID": "gate_def456"
+      }
+    }
+  }
+}
+```
+
+**Claude Code** — add to your project's `.mcp.json` or run:
+
+```bash
+claude mcp add supravisor npx uniplex-mcp-manage
+```
+
+### Step 3: Set Environment Variables
+
+```bash
+# In your shell profile or .env
+export UNIPLEX_PASSPORT_KEY="ed25519_private_key_here"
+export UNIPLEX_API_KEY="uni_xxxx"
+export UNIPLEX_GATE_ID="gate_def456"
+```
+
+Or in `.env` (Claude Code reads this from the project root):
+
+```
+UNIPLEX_PASSPORT_KEY=ed25519_private_key_here
+UNIPLEX_API_KEY=uni_xxxx
+UNIPLEX_GATE_ID=gate_def456
+```
+
+<Note>
+  Claude Code reads environment variables from your shell session and `.env` files in the project root. The Supravisor SDK picks up `UNIPLEX_PASSPORT_KEY` automatically — no extra configuration needed.
+</Note>
+
+Done. Claude now checks every tool call against your gate before executing.
+
+---
+
+## Option B: Python SDK Integration
+
+For custom Claude tooling or Claude API integrations, wrap your tool calls with a Supravisor gate check:
+
+```python
+import anthropic
+from uniplex import Agent, Gate, TrustProfile
+
+# Initialize once at startup
+agent = Agent.from_env()  # reads UNIPLEX_PASSPORT_KEY
+gate = Gate(
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_day": "$20.00",
+        "domain_allowlist": "api.openai.com,anthropic.com,github.com",
+        "read_only": False,
+        "max_per_minute": 5
+    }
+)
+
+client = anthropic.Anthropic()
+
+def protected_tool_call(action: str, fn, **kwargs):
+    """Wrap any tool call — enforce before execute."""
+    token = agent.generate_token()
+    decision = gate.authorize(token, action)
+    
+    if not decision.allowed:
+        # Return the reason to Claude so it can explain the block
+        return {"error": f"Blocked by Supravisor: {decision.reason}"}
+    
+    return fn(**kwargs)
+
+# File read — enforced
+def read_file(path: str) -> str:
+    return protected_tool_call(
+        "files:read",
+        lambda: open(path).read()
+    )
+
+# Web search — enforced
+def web_search(query: str) -> list:
+    return protected_tool_call(
+        "web:search",
+        lambda: perform_search(query)
+    )
+```
+
+---
+
+## A Complete Claude Code Setup
+
+Here's a full example: Claude Code that can read and modify files in a project directory, but cannot delete files or reach external services outside a specific allowlist.
+
+**Gate configuration** (set in the dashboard):
+
+```json
+{
+  "profile": "L2",
+  "trusted_issuers": ["issuer:mycompany.ai"],
+  "constraints": {
+    "action_blocklist": "files:delete",
+    "domain_allowlist": "api.anthropic.com,github.com,pypi.org,npmjs.com",
+    "max_per_hour": 200,
+    "read_only": false,
+    "required": "session_id"
+  }
+}
+```
+
+**In your Claude Code project:**
+
+```python
+# supravisor_guard.py
+import os
+from uniplex import Agent, Gate, TrustProfile
+
+agent = Agent.from_env()
+gate = Gate(gate_id=os.environ["UNIPLEX_GATE_ID"])
+
+session_id = os.environ.get("CLAUDE_SESSION_ID", "default")
+
+def check(action: str, resource: str = None) -> bool:
+    """Check whether Claude can perform this action."""
+    token = agent.generate_token(metadata={"session_id": session_id})
+    decision = gate.authorize(token, action, resource=resource)
+    
+    if not decision.allowed:
+        print(f"[Supravisor] Blocked: {decision.reason}")
+        print(f"[Supravisor] Attestation: {decision.attestation_id}")
+    return decision.allowed
+
+# Use it to guard any operation Claude performs
+if check("files:write", resource="src/main.py"):
+    # Claude is allowed to write this file
+    write_file("src/main.py", content)
+```
+
+---
+
+## What Claude Can and Can't Do
+
+Based on a typical development gate configuration:
+
+| Action | Claude CAN | Claude CANNOT |
+|--------|-----------|---------------|
+| Web access | Search and read approved domains | Access social media, competitor sites |
+| Files | Read project files, create new files | Delete files, access outside project |
+| API calls | Call approved APIs within rate limits | Exceed spending cap, reach blocked domains |
+| External services | Use configured integrations | New integrations without gate update |
+| Spending | Up to daily cap | Exceed cap without triggering approval |
+
+---
+
+## Reviewing What Claude Did
+
+After a Claude session, see every gate decision in the dashboard under **Activity**. Or query directly:
+
+```bash
+# All decisions for Claude's session
+curl "https://uniplex.ai/api/audit-trail" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "agent_id=claude-code-agent" \
+  --data-urlencode "limit=100"
+```
+
+Every action Claude took (or tried to take) is there. Every denial includes the exact reason. Every allow includes the constraints that were satisfied. All signed.
+
+---
+
+## Troubleshooting: When Claude Gets Blocked
+
+Denials come back with a clear reason:
+
+```json
+{
+  "error": "Supravisor: action denied",
+  "reason": "Domain not in allowlist: twitter.com",
+  "attestation_id": "att_xyz789"
+}
+```
+
+**Common blocks and fixes:**
+
+| Denial Reason | Fix |
+|---------------|-----|
+| "Domain not in allowlist" | Add the domain to your gate's `domain_allowlist` |
+| "Spending limit exceeded" | Increase `max_per_day` or wait until the reset |
+| "Rate limit exceeded" | Increase `max_per_minute` or add retry logic |
+| "Action in blocklist" | Review `action_blocklist` — is this intentional? |
+| "Passport expired" | Issue a new passport, update `UNIPLEX_PASSPORT_KEY` |
+| "Issuer not trusted" | Add your issuer to the gate's trusted issuers list |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MCP Server Guide" href="/docs/guides/mcp-server" icon="server">
+    All 21 MCP tools and how to use them from Claude.
+  </Card>
+  <Card title="Audit Trail" href="/docs/guides/audit-trail" icon="file-lines">
+    Export and share cryptographic proof of what Claude did.
+  </Card>
+  <Card title="Templates" href="/docs/templates/developer-tools" icon="grid">
+    Pre-built profiles for Claude Code and developer workflows.
+  </Card>
+</CardGroup>

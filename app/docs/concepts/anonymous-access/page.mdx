@@ -1,0 +1,175 @@
+# Anonymous Access
+
+Not every visitor needs a key card to walk through the door.
+
+Think of a hotel. The lobby is open to anyone. You can walk in, look around, read the brochures, ask what amenities are available. But the guest rooms? Those need a key card. And if you try to go upstairs without one, the front desk doesn't just block you — it tells you exactly how to get one.
+
+That's anonymous access. You configure your gate's "lobby" — what unauthenticated agents can do without a passport — and provide a clear upgrade path for agents that need full access.
+
+---
+
+## Why This Matters
+
+Most services don't need zero-knowledge anonymity. They need a sensible default for unauthenticated visitors combined with a friction-free path to full access.
+
+Anonymous access lets you:
+- Let agents browse your service catalog and discover capabilities without credentials
+- Apply conservative guardrails to unauthenticated traffic (read-only, rate-limited)
+- Give unknown agents a clear message: here's how to get a passport for full access
+- Avoid hard "no passport, no entry" walls that create poor developer experience
+
+---
+
+## What Anonymous Access Looks Like
+
+A gate with anonymous access configured behaves like this:
+
+```
+Unauthenticated Request → Gate
+  ├── Does it fit within anonymous policy?
+  │   ├── YES → Allow (with anonymous guardrails applied)
+  │   └── NO  → Deny with upgrade message:
+  │             "This action requires a passport.
+  │              Get one at: https://example.com/signup"
+  └── Attestation logged either way
+```
+
+Authenticated requests still go through full passport verification.
+
+---
+
+## Configuring Anonymous Access
+
+Via the MCP tool:
+
+```json
+{
+  "gate_id": "gate_def456",
+  "policy": {
+    "enabled": true,
+    "allowed_actions": ["catalog:read", "web:search"],
+    "read_only": true,
+    "rate_limit_per_minute": 10,
+    "rate_limit_per_hour": 100,
+    "upgrade_message": "Get a passport for full access to this service.",
+    "upgrade_url": "https://example.com/signup"
+  }
+}
+```
+
+| Field | What it does |
+|-------|-------------|
+| `enabled` | Turns anonymous access on or off |
+| `allowed_actions` | Which actions unauthenticated agents can perform |
+| `read_only` | Force read-only for all anonymous traffic |
+| `rate_limit_per_minute` | How many actions per minute without a passport |
+| `rate_limit_per_hour` | How many actions per hour without a passport |
+| `upgrade_message` | What the gate tells an agent that needs a passport |
+| `upgrade_url` | Where to go to get a passport |
+
+---
+
+## Read the Current Policy
+
+```bash
+curl https://uniplex.ai/api/gates/gate_def456/anonymous-policy \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+```json
+{
+  "enabled": true,
+  "allowed_actions": ["catalog:read"],
+  "read_only": true,
+  "rate_limit_per_minute": 10,
+  "rate_limit_per_hour": 100,
+  "upgrade_message": "Get a passport for full access.",
+  "upgrade_url": "https://example.com/signup"
+}
+```
+
+---
+
+## What Unauthenticated Agents See
+
+When an anonymous agent hits a gate with the right permissions, the response looks like a normal allow decision — but without a `passport_id` or `agent_id` in the attestation.
+
+When an anonymous agent tries to do something beyond its allowed scope:
+
+```json
+{
+  "allowed": false,
+  "reason": "This action requires authentication. Get a passport at: https://example.com/signup",
+  "upgrade_url": "https://example.com/signup",
+  "attestation_id": "att_xyz789"
+}
+```
+
+Clear. Actionable. No mystery about what to do next.
+
+---
+
+## Common Patterns
+
+### Service Discovery Lobby
+
+Let agents browse your catalog without credentials. Everything useful beyond browsing requires a passport.
+
+```json
+{
+  "enabled": true,
+  "allowed_actions": ["catalog:read", "catalog:list"],
+  "read_only": true,
+  "rate_limit_per_minute": 20,
+  "upgrade_message": "Issue a passport to access live data and actions.",
+  "upgrade_url": "https://yourservice.ai/signup"
+}
+```
+
+### Developer Sandbox Access
+
+Let developers test your API read-only before committing to a full integration.
+
+```json
+{
+  "enabled": true,
+  "allowed_actions": ["api:read", "api:test"],
+  "read_only": true,
+  "rate_limit_per_minute": 5,
+  "rate_limit_per_hour": 50,
+  "upgrade_message": "Create an account for production access and higher rate limits.",
+  "upgrade_url": "https://yourservice.ai/developers"
+}
+```
+
+### Fully Closed (No Anonymous Access)
+
+The default. Nothing gets through without a passport.
+
+```json
+{
+  "enabled": false
+}
+```
+
+---
+
+## Attestations for Anonymous Traffic
+
+Every anonymous request still produces an attestation — signed and immutable, just like authenticated requests. Anonymous attestations have `anonymous: true` in place of `passport_id` and `agent_id`. Your audit trail stays complete regardless of whether traffic was authenticated.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Gates" href="/docs/concepts/gates" icon="shield-check">
+    The full gate concept — how enforcement works with and without passports.
+  </Card>
+  <Card title="Catalogs" href="/docs/concepts/catalogs" icon="list">
+    Publish a discoverable service catalog for your gate.
+  </Card>
+  <Card title="Gates API" href="/docs/api-reference/gates" icon="code">
+    Configure anonymous access via the REST API.
+  </Card>
+</CardGroup>

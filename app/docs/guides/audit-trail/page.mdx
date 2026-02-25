@@ -1,0 +1,291 @@
+# Audit Trail and Session Sharing
+
+Every gate decision — allow or deny — produces a signed attestation stored in the audit trail.
+
+This is not a log file. Log files can be edited. A log file proves nothing except that someone wrote something down. The audit trail is different: each entry is signed by the gate's Ed25519 private key at the moment of the decision. The signature covers every field. Change anything — the decision, the timestamp, the agent ID, a single constraint value — and signature verification fails.
+
+That's how "trust me, the agent behaved" becomes "here's cryptographic proof the agent behaved."
+
+---
+
+## What's in Every Entry
+
+| Field | What it tells you |
+|-------|------------------|
+| Attestation ID | Unique ID (`att_`) for this exact decision |
+| Decision | `allow` or `deny` — no ambiguity |
+| Reason | Exact explanation — which constraint passed or failed |
+| Agent ID + Name | Which agent made the request |
+| Gate ID + Name | Which gate evaluated it |
+| Action | What the agent tried to do |
+| Resource | What target resource (if provided) |
+| Timestamp | UTC, millisecond precision |
+| Constraints evaluated | Every constraint checked, with current values |
+| Gate signature | Ed25519 signature over the complete record |
+
+---
+
+## Reading It in the Dashboard
+
+### Activity Tab
+
+Live stream of decisions, most recent first.
+
+- 🟢 Green rows = allowed
+- 🔴 Red rows = denied
+- Each row: agent name, action, decision, timestamp
+- Click any row to see the full attestation with constraints breakdown
+
+**Best for:** Real-time monitoring, spotting what just happened.
+
+### Audit Trail Tab
+
+Complete queryable history.
+
+- Filter by agent, gate, decision, time range, or action type
+- Sort by any column
+- Export as JSON or CSV
+- Share individual records via public URL
+
+**Best for:** Compliance exports, debugging specific incidents, client reporting.
+
+---
+
+## Filtering and Querying via API
+
+```bash
+# Last 50 decisions
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G --data-urlencode "limit=50"
+
+# All denials for a specific agent
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "agent_id=my-research-agent" \
+  --data-urlencode "decision=deny" \
+  --data-urlencode "limit=50"
+
+# Everything in February
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "from=2026-02-01T00:00:00Z" \
+  --data-urlencode "to=2026-02-28T23:59:59Z" \
+  --data-urlencode "limit=500"
+
+# Specific action type
+curl https://uniplex.ai/api/audit-trail \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "action=payments:send"
+
+# Single attestation by ID
+curl https://uniplex.ai/api/audit-trail/att_xyz789 \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+### Python SDK
+
+```python
+from uniplex import UniplexClient
+from datetime import datetime, timedelta
+
+client = UniplexClient(api_key="uni_xxxx")
+
+# Last 50 decisions for an agent
+attestations = client.audit_trail.list(
+    agent_id="my-research-agent",
+    limit=50
+)
+
+# All denials this week
+week_ago = datetime.utcnow() - timedelta(days=7)
+denials = client.audit_trail.list(
+    decision="deny",
+    from_time=week_ago,
+    limit=200
+)
+
+for att in denials:
+    print(f"{att.timestamp} | {att.agent_id} | {att.action} | {att.reason}")
+
+# Get a single attestation (includes the gate_signature)
+att = client.audit_trail.get("att_xyz789")
+print(att.gate_signature)
+```
+
+---
+
+## Exporting
+
+### Dashboard
+
+1. Navigate to **Audit Trail**
+2. Apply your filters
+3. Click **Export** → JSON or CSV
+4. File downloads immediately
+
+### API
+
+```bash
+# Export as CSV
+curl "https://uniplex.ai/api/audit-trail/export?format=csv&agent_id=my-agent&from=2026-01-01" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -o agent-audit-jan-2026.csv
+
+# Export as JSON (includes gate_signature on every record)
+curl "https://uniplex.ai/api/audit-trail/export?format=json&from=2026-01-01&to=2026-01-31" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -o january-audit.json
+```
+
+The JSON export includes the full attestation, including `gate_signature`. Auditors can verify signatures independently using the gate's public key.
+
+---
+
+## Sharing: Public Proof URLs
+
+Generate a public URL for any attestation. Anyone with the link can view the record and verify the signature — no Supravisor account needed.
+
+```bash
+curl -X POST https://uniplex.ai/api/audit-trail/att_xyz789/share \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"expires_in": "30d"}'
+```
+
+```json
+{
+  "share_url": "https://uniplex.ai/proof/att_xyz789_abc123token",
+  "expires_at": "2026-03-24T10:30:00Z"
+}
+```
+
+**The link shows:** decision, action, timestamp, constraints evaluated, agent name, gate signature.
+
+**The link hides:** your API keys, gate configuration details, issuer private keys.
+
+---
+
+## Use Cases
+
+### Compliance Audits
+
+Export your audit trail for any period as signed JSON. Hand it to auditors. Each record's `gate_signature` lets them verify tamper-proof records independently — using just the gate's public key and standard Ed25519 verification tools.
+
+```bash
+# Q1 2026 compliance export
+curl "https://uniplex.ai/api/audit-trail/export?format=json&from=2026-01-01&to=2026-03-31" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -o q1-2026-compliance-export.json
+```
+
+### Client Reporting
+
+Running agents on behalf of clients? Share attestation URLs to prove the agent only did what was authorized.
+
+```python
+# Generate share links for a client session
+client_attestations = client.audit_trail.list(
+    agent_id="client-abc-research-agent",
+    from_time=session_start
+)
+
+share_links = []
+for att in client_attestations:
+    share = client.audit_trail.share(att.attestation_id, expires_in="90d")
+    share_links.append({
+        "action": att.action,
+        "decision": att.decision,
+        "timestamp": att.timestamp,
+        "proof_url": share.share_url
+    })
+
+# Include share_links in your client report
+```
+
+### Debugging Agent Behavior
+
+Agent got blocked unexpectedly? The denial attestation shows exactly which constraint failed and what the current values were.
+
+```python
+# Find the most recent denial
+denial = client.audit_trail.list(
+    agent_id="my-agent",
+    decision="deny",
+    limit=1
+)[0]
+
+print(f"Denied at: {denial.timestamp}")
+print(f"Action: {denial.action}")
+print(f"Reason: {denial.reason}")
+
+# Drill into the exact constraint
+for constraint in denial.constraints_evaluated:
+    if constraint["result"] == "fail":
+        print(f"\nFailed: {constraint['type']}")
+        print(f"  Limit: {constraint['value']}")
+        print(f"  Current: {constraint['current']}")
+        print(f"  Detail: {constraint['detail']}")
+```
+
+### Dispute Resolution
+
+Someone disputes an agent action? Pull the attestation. It shows what happened, every constraint that was checked, the exact timestamp, and a signature proving the record hasn't been altered since it was created.
+
+---
+
+## Verifying Signatures Offline
+
+Verify any attestation without trusting Supravisor's API. Get your gate's public key from **Dashboard → Gates → your gate → Export Public Key**.
+
+```python
+import json
+import base64
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+def verify_attestation(attestation_json: str, gate_public_key_b64: str) -> bool:
+    """
+    Independently verify an attestation's signature.
+    If this returns True, the record is provably unaltered.
+    """
+    attestation = json.loads(attestation_json)
+    signature_b64 = attestation.pop("gate_signature")
+    signature = base64.b64decode(signature_b64)
+    
+    # Canonical JSON — sorted keys, no whitespace — same as what was signed
+    payload = json.dumps(
+        attestation, sort_keys=True, separators=(',', ':')
+    ).encode('utf-8')
+    
+    public_key_bytes = base64.b64decode(gate_public_key_b64)
+    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+    
+    try:
+        public_key.verify(signature, payload)
+        return True   # Signature valid — record is unaltered
+    except Exception:
+        return False  # Signature failed — something was changed
+
+# Usage
+with open("attestation.json") as f:
+    attestation_data = f.read()
+
+is_valid = verify_attestation(attestation_data, "YOUR_GATE_PUBLIC_KEY_BASE64")
+print(f"Attestation valid: {is_valid}")
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Audit Trail API" href="/docs/api-reference/audit-trail" icon="code">
+    Full REST reference for querying and exporting attestations.
+  </Card>
+  <Card title="Attestations" href="/docs/concepts/attestations" icon="file-certificate">
+    Deep dive into the attestation format and signature structure.
+  </Card>
+</CardGroup>

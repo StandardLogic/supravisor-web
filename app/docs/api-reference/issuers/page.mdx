@@ -1,0 +1,227 @@
+# Issuers API
+
+Issuers are the trust anchors. Every passport must be signed by an issuer, and gates verify passports by checking whether the signing issuer is in their trusted list.
+
+When you create an issuer, you become the authority that signs credentials for your agents. You control which agents exist and what they're permitted to claim.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## List Issuers
+
+```
+GET /api/issuers
+```
+
+**Required scope:** `issuers:read`
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `status` | string | Filter by `active` or `revoked` |
+| `limit` | integer | Results per page (default: 50, max: 200) |
+| `offset` | integer | Pagination offset |
+
+**Example Request:**
+
+```bash
+curl https://uniplex.ai/api/issuers \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:**
+
+```json
+{
+  "issuers": [
+    {
+      "issuer_id": "issuer:acmecorp.ai",
+      "name": "Production Agents",
+      "description": "Signs all production agent credentials",
+      "trust_tier": "internal",
+      "public_key": "base64_ed25519_public_key...",
+      "passport_count": 12,
+      "status": "active",
+      "created_at": "2026-01-15T00:00:00Z"
+    }
+  ],
+  "total": 3,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+## Create Issuer
+
+Create a new issuer. Provide your own `public_key` if you generated the keypair yourself (recommended for production — key generation in browser never sends the private key to Supravisor). Omit `public_key` to have Supravisor generate a keypair server-side.
+
+```
+POST /api/issuers
+```
+
+**Required scope:** `issuers:create`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | ✅ | Human-readable name |
+| `issuer_id` | string | ✅ | Unique identifier in `issuer:domain` format |
+| `description` | string | ❌ | Optional notes |
+| `public_key` | string | ❌ | Base64 Ed25519 public key if you generated the keypair yourself |
+
+**Example Request:**
+
+```bash
+curl -X POST https://uniplex.ai/api/issuers \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Agents",
+    "issuer_id": "issuer:acmecorp.ai",
+    "description": "Signs all production agent credentials"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "issuer_id": "issuer:acmecorp.ai",
+  "name": "Production Agents",
+  "trust_tier": "internal",
+  "public_key": "base64_ed25519_public_key...",
+  "private_key": "base64_ed25519_private_key_SHOWN_ONCE",
+  "status": "active",
+  "created_at": "2026-02-24T10:00:00Z"
+}
+```
+
+<Warning>
+  `private_key` is shown exactly once. Store it in `UNIPLEX_ISSUER_PRIVATE_KEY` in your secrets manager immediately. It cannot be recovered.
+</Warning>
+
+---
+
+## Get Issuer
+
+```
+GET /api/issuers/:issuer_id
+```
+
+**Required scope:** `issuers:read`
+
+```bash
+curl https://uniplex.ai/api/issuers/issuer:acmecorp.ai \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:**
+
+```json
+{
+  "issuer_id": "issuer:acmecorp.ai",
+  "name": "Production Agents",
+  "description": "Signs all production agent credentials",
+  "trust_tier": "internal",
+  "public_key": "base64_ed25519_public_key...",
+  "passport_count": 12,
+  "active_passport_count": 10,
+  "status": "active",
+  "created_at": "2026-01-15T00:00:00Z",
+  "updated_at": "2026-01-15T00:00:00Z"
+}
+```
+
+---
+
+## Update Issuer
+
+Update an issuer's name or description. The keypair and issuer ID cannot be changed.
+
+```
+PUT /api/issuers/:issuer_id
+```
+
+**Required scope:** `issuers:update`
+
+```bash
+curl -X PUT https://uniplex.ai/api/issuers/issuer:acmecorp.ai \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Agents v2",
+    "description": "Updated for Q2 2026 deployment"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "issuer_id": "issuer:acmecorp.ai",
+  "name": "Production Agents v2",
+  "description": "Updated for Q2 2026 deployment",
+  "status": "active",
+  "updated_at": "2026-02-24T10:30:00Z"
+}
+```
+
+---
+
+## Revoke Issuer
+
+Revoke an issuer. Every passport signed by this issuer becomes invalid immediately — all agents using those passports lose access.
+
+```
+DELETE /api/issuers/:issuer_id
+```
+
+**Required scope:** `issuers:update`
+
+<Warning>
+  Issuer revocation is **immediate and irreversible**. Migrate all agents to a new issuer before revoking. The response shows how many passports are invalidated.
+</Warning>
+
+```bash
+curl -X DELETE https://uniplex.ai/api/issuers/issuer:acmecorp.ai \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:**
+
+```json
+{
+  "issuer_id": "issuer:acmecorp.ai",
+  "status": "revoked",
+  "revoked_at": "2026-02-24T11:00:00Z",
+  "passports_invalidated": 12
+}
+```
+
+---
+
+## Error Responses
+
+| Error Code | Description |
+|-----------|-------------|
+| `ISSUER_NOT_FOUND` | No issuer with this ID exists |
+| `ISSUER_ID_TAKEN` | The issuer_id is already in use |
+| `ISSUER_ALREADY_REVOKED` | Cannot revoke an already-revoked issuer |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Passports API" href="/docs/api-reference/passports" icon="id-card">
+    Issue credentials signed by your issuer.
+  </Card>
+  <Card title="Issuers Concept" href="/docs/concepts/issuers" icon="stamp">
+    Understand trust tiers and multi-issuer patterns.
+  </Card>
+</CardGroup>

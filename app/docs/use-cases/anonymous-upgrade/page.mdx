@@ -1,0 +1,155 @@
+# Use Case: Anonymous Access with Graceful Upgrade
+
+<Note>
+  **The moment:** Agents discover your API, try it anonymously, and self-upgrade to authenticated access — with no manual coordination on your end.
+</Note>
+
+You're launching an API. You want to let agents try it without credentials — but encourage (and eventually require) them to get a passport for full access. No coordination with agent operators needed.
+
+---
+
+## The Goal
+
+```
+Unknown agent → free tier (anonymous, rate-limited)
+      ↓  (hits rate limit or tries gated endpoint)
+Gets upgrade prompt → signs up → gets passport
+      ↓
+Authenticated agent → full access + audit trail
+```
+
+---
+
+## Step 1: Deploy Gate with Anonymous Policy
+
+```bash
+# Create gate
+POST /api/gates
+{
+  "name": "Research API",
+  "gate_id": "gate_research-api",
+  "profile": "L1"
+}
+
+# Enable anonymous access
+PUT /api/gates/gate_research-api/anonymous-policy
+{
+  "enabled": true,
+  "allowed_actions": ["data:search", "catalog:read"],
+  "read_only": true,
+  "rate_limit_per_minute": 5,
+  "rate_limit_per_hour": 50,
+  "upgrade_message": "Get a free API key for 100x higher rate limits and export access.",
+  "upgrade_url": "https://yourapi.com/signup"
+}
+```
+
+---
+
+## Step 2: Agent Tries Anonymous Access
+
+```bash
+POST /api/gates/gate_research-api/check
+{ "action": "data:search" }   # no passport_json
+```
+
+**Response (anonymous permitted):**
+```json
+{ "decision": "allow", "anonymous": true }
+```
+
+Rate counters increment. No attestation — no identity to attest.
+
+---
+
+## Step 3: Agent Hits a Protected Endpoint
+
+```bash
+POST /api/gates/gate_research-api/check
+{ "action": "data:export" }   # no passport, not in allowed_actions
+```
+
+**Response (401):**
+```json
+{
+  "error": "passport_required",
+  "passport_required_url": "https://yourapi.com/signup",
+  "gate_id": "gate_research-api",
+  "required_permissions": ["data:export"],
+  "message": "Get a free API key for 100x higher rate limits and export access."
+}
+```
+
+---
+
+## Step 4: Agent Self-Onboards
+
+The agent's operator follows `passport_required_url`, signs up, and gets a passport issued. This can be fully automated: some agent frameworks detect the `passport_required` error and initiate the signup flow programmatically.
+
+---
+
+## Step 5: Agent Retries with Passport
+
+```bash
+POST /api/gates/gate_research-api/check
+{
+  "passport_json": { "payload": {...}, "signature": "..." },
+  "action": "data:export"
+}
+```
+
+**Response:**
+```json
+{
+  "decision": "allow",
+  "attestation": {
+    "attestation_id": "att_xyz789",
+    "signature": "base64...",
+    "attester_public_key": "base64..."
+  }
+}
+```
+
+Now every action produces a signed attestation. The agent has full access within its passport's constraints.
+
+---
+
+## Critical: The Anti-Downgrade Invariant
+
+An agent cannot present an expired or revoked passport and fall back to anonymous access:
+
+```bash
+# Expired passport
+POST /api/gates/gate_research-api/check
+{ "passport_json": { ... EXPIRED ... }, "action": "data:search" }
+
+# Response: 403 DENY (not 200 anonymous)
+{ "decision": "deny", "reason_code": "EXPIRED_PASSPORT" }
+```
+
+The gate detects the invalid credential and denies — it never evaluates anonymous policy when any credential is present.
+
+---
+
+## Observing Anonymous Traffic
+
+Anonymous requests are logged in `anonymous_access_log`. In the dashboard at `/activity`, operators see:
+
+- How many anonymous agents are hitting the gate
+- Which actions they're requesting
+- When they cross into the upgrade path (401 responses)
+- Conversion: anonymous → authenticated
+
+---
+
+## The Business Case
+
+This pattern makes your API self-serve at the infrastructure level:
+
+1. No coordination with agent teams to grant initial access
+2. Free tier builds awareness and intent
+3. Protected endpoints create natural upgrade pressure
+4. Self-onboarding removes the human from the critical path
+5. Once authenticated, you have a full audit trail
+
+Deploy first. Let the gate do the rest.

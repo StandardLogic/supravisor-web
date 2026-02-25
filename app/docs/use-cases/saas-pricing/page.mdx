@@ -1,0 +1,133 @@
+# Use Case: SaaS API Pricing
+
+<Note>
+  **The moment:** Publishing your pricing once — and knowing no agent can ever be billed for terms they didn't agree to, even if you change them later.
+</Note>
+
+A SaaS provider offers tiered API access. They need pricing that can't be changed on existing customers without consent, a discoverable service listing, and metered billing.
+
+---
+
+## Define the Catalog
+
+The provider builds a catalog in the dashboard (`/gates/[gate_id]/catalog`) with three tiers:
+
+```json
+{
+  "permissions": [
+    {
+      "permission_key": "api:basic",
+      "constraints": {
+        "core:pricing:per_call_cents": 10,
+        "core:rate:max_per_minute": 100,
+        "core:sla:uptime_basis_points": 9950,
+        "core:sla:response_time_ms": 500
+      }
+    },
+    {
+      "permission_key": "api:pro",
+      "constraints": {
+        "core:pricing:per_call_cents": 5,
+        "core:rate:max_per_minute": 1000,
+        "core:sla:uptime_basis_points": 9990,
+        "core:sla:response_time_ms": 200
+      }
+    },
+    {
+      "permission_key": "api:enterprise",
+      "constraints": {
+        "core:pricing:per_call_cents": 1,
+        "core:rate:max_per_minute": 10000,
+        "core:sla:uptime_basis_points": 9999,
+        "core:sla:response_time_ms": 100
+      }
+    }
+  ]
+}
+```
+
+**Publish:**
+
+```bash
+POST /api/gates/gate_saas-api/catalog/publish
+{ "change_summary": "Initial pricing tiers v1" }
+```
+
+This creates catalog v1 with `content_hash: sha256:a3f9...` and makes the gate discoverable.
+
+---
+
+## Agents Discover the Service
+
+```bash
+GET /api/discover?capability=api:pro&max_price_cents=10&sort=price_asc
+```
+
+The result includes `catalog_content_hash` and `catalog_signature`. Agents verify locally — if the signature doesn't match, they don't trust the terms.
+
+---
+
+## Passport Issuance (Version-Locked)
+
+When a developer subscribes to Pro tier:
+
+```bash
+POST /api/gates/gate_saas-api/passports
+{
+  "permissions": ["api:pro"],
+  "expires_in": "365d"
+}
+```
+
+The passport is stored with `catalog_content_hash: "sha256:a3f9..."` and `catalog_version_locked: 1`.
+
+---
+
+## Provider Raises Pro Tier Price
+
+The provider wants to increase `api:pro` from $0.05/call to $0.08/call:
+
+**Before publishing, check impact:**
+
+```bash
+POST /api/gates/gate_saas-api/catalog/impact
+```
+
+```json
+{
+  "has_breaking_changes": true,
+  "changes": [
+    {
+      "type": "price_increase",
+      "permission_key": "api:pro",
+      "old_price_cents": 5,
+      "new_price_cents": 8
+    }
+  ]
+}
+```
+
+**After publishing (catalog v2):**
+
+Existing customers' passports still reference `catalog_version_locked: 1`. The gate honors the v1 pricing for them. No silent change.
+
+**Customers can accept the upgrade:**
+
+```bash
+POST /api/passports/uni_customer-001/reissue
+{ "accept_catalog_version": 2 }
+```
+
+Returns the diff so the customer knows exactly what changed before consenting.
+
+---
+
+## Anti-Bait-and-Switch Summary
+
+| Action | What Happens |
+|--------|-------------|
+| Provider raises price | Existing customers continue at old price |
+| Provider removes permission | Existing customers still have it (catalog locked) |
+| Provider publishes new catalog | Breaking changes flagged; customers notified |
+| Customer reissues passport | Must explicitly accept new catalog terms |
+| Customer is never surprised | ✅ Math enforces the contract |

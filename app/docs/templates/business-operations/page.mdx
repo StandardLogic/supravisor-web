@@ -1,0 +1,266 @@
+# Business Operations Templates
+
+Six templates for business process automation. These are built for team deployments where more than one person is affected by what the agent does.
+
+The defaults are conservative for a reason: customer data, financial records, and employee information have legal implications. The templates reflect what goes wrong in practice — support bots that can accidentally close tickets, sales agents that can email without approval, HR agents that shouldn't see salary data.
+
+---
+
+## 1. Customer Support Agent
+
+**What it does:** Reads your knowledge base, responds to support tickets, and escalates to a human when needed — without touching payments, closing tickets autonomously, or accessing PII in bulk.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `tickets:read, tickets:respond, kb:read, tickets:tag` | No delete, close, or payment access |
+| `action_blocklist` | `tickets:delete, tickets:close, payments:*` | Hard blocks |
+| `required` | `ticket_id` | Every action tagged to a ticket |
+| `no_pii_export` | `true` | Customer data protection |
+
+```json
+{
+  "template": "customer-support-agent",
+  "constraints": {
+    "action_allowlist": [
+      "tickets:read",
+      "tickets:respond",
+      "tickets:tag",
+      "tickets:escalate",
+      "kb:read",
+      "kb:search"
+    ],
+    "action_blocklist": [
+      "tickets:delete",
+      "tickets:close",
+      "tickets:bulk_update",
+      "payments:read",
+      "payments:send"
+    ],
+    "required": "ticket_id",
+    "no_pii_export": true,
+    "max_per_minute": 10,
+    "read_only": false
+  }
+}
+```
+
+<Tip>
+  Configure your ticket system to pause agent responses when terms like "refund," "lawyer," or "cancel account" appear — before Supravisor evaluation even runs.
+</Tip>
+
+---
+
+## 2. Sales Development Agent
+
+**What it does:** Researches prospects and prepares outreach — but cannot send a single email without a human approving it first. Research is fully automated. Sending requires a human in the loop.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `web:search, crm:read, crm:update, email:draft` | Draft only, not send |
+| `action_blocklist` | `email:send, email:schedule` | No autonomous sending |
+| `no_pii_export` | `true` | No bulk prospect export |
+
+```json
+{
+  "template": "sales-development-agent",
+  "constraints": {
+    "action_allowlist": [
+      "web:search",
+      "web:read",
+      "crm:read",
+      "crm:create",
+      "crm:update",
+      "email:draft",
+      "email:read"
+    ],
+    "action_blocklist": [
+      "email:send",
+      "email:schedule",
+      "email:bulk_send",
+      "crm:delete"
+    ],
+    "no_pii_export": true,
+    "max_per_hour": 50,
+    "domain_allowlist": "linkedin.com,crunchbase.com,apollo.io",
+    "required": "prospect_id"
+  }
+}
+```
+
+---
+
+## 3. Contract Review Agent
+
+**What it does:** Reads contracts, flags clause types (liability caps, auto-renewal, IP assignment), and produces summaries — without modifying any documents. Ever.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `read_only` | `true` | Absolute — no modifications |
+| `action_allowlist` | `files:read, docs:read, docs:summarize` | Read and local annotation only |
+| `no_pii_export` | `true` | No customer PII in outputs |
+| `domain_blocklist` | External AI services | No contract text to third-party AI |
+
+```json
+{
+  "template": "contract-review-agent",
+  "constraints": {
+    "read_only": true,
+    "action_allowlist": [
+      "files:read",
+      "docs:read",
+      "docs:search",
+      "docs:summarize"
+    ],
+    "action_blocklist": [
+      "docs:write",
+      "docs:sign",
+      "docs:share_external",
+      "files:upload_external"
+    ],
+    "domain_blocklist": "openai.com,anthropic.com,chatgpt.com",
+    "no_pii_export": true,
+    "required": "document_id"
+  }
+}
+```
+
+<Warning>
+  The `domain_blocklist` for external AI services ensures that contract text is not sent to third-party AI services. If you need AI summarization, add your specific API domain to the allowlist and audit the integration.
+</Warning>
+
+---
+
+## 4. HR Onboarding Agent
+
+**What it does:** Sends templated onboarding emails, provisions accounts, and guides new hires — without access to salary data, SSNs, or bank information.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `email:send_template, hris:read_public, accounts:provision` | Templates only, no freeform |
+| `action_blocklist` | `hris:read_salary, hris:read_ssn, hris:delete` | Hard blocks on sensitive fields |
+| `no_pii_export` | `true` | No bulk employee data export |
+| `required` | `employee_id` | Every action tagged to an employee |
+
+```json
+{
+  "template": "hr-onboarding-agent",
+  "constraints": {
+    "action_allowlist": [
+      "email:send_template",
+      "hris:read_public",
+      "hris:update_onboarding_status",
+      "accounts:provision",
+      "calendar:create_onboarding_events",
+      "docs:send_template"
+    ],
+    "action_blocklist": [
+      "hris:read_salary",
+      "hris:read_ssn",
+      "hris:read_bank_info",
+      "hris:delete",
+      "email:send_freeform"
+    ],
+    "no_pii_export": true,
+    "required": "employee_id",
+    "read_only": false
+  }
+}
+```
+
+---
+
+## 5. Expense Report Agent
+
+**What it does:** Reads receipts and expense submissions, creates records in your expense system, and prepares reports — without the ability to approve, execute, or reject payments.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `expenses:read, expenses:create, receipts:read` | Create records, not payments |
+| `action_blocklist` | `payments:*, expenses:approve, expenses:reject` | No payment execution |
+| `approval_threshold` | `$500.00` | Human reviews large expense reports |
+| `no_pii_export` | `true` | Receipts may contain PII |
+
+```json
+{
+  "template": "expense-report-agent",
+  "constraints": {
+    "action_allowlist": [
+      "expenses:read",
+      "expenses:create",
+      "expenses:update_draft",
+      "receipts:read",
+      "receipts:ocr",
+      "reports:create"
+    ],
+    "action_blocklist": [
+      "payments:send",
+      "payments:approve",
+      "expenses:approve",
+      "expenses:reject",
+      "expenses:delete"
+    ],
+    "approval_threshold": "$500.00",
+    "no_pii_export": true,
+    "required": "submitter_id"
+  }
+}
+```
+
+---
+
+## 6. Meeting Scheduler
+
+**What it does:** Reads calendars, proposes times, creates events, and sends invitations — with limits on external invitations to prevent calendar spam or data leakage.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `calendar:read, calendar:create, calendar:invite` | R/W with invite cap |
+| `action_blocklist` | `calendar:delete_all, calendar:export_all` | No bulk operations |
+| `max_per_hour` | `20 external invites` | Prevent calendar bombing |
+| `domain_allowlist` | Company domains | External invites to approved domains only |
+
+```json
+{
+  "template": "meeting-scheduler",
+  "constraints": {
+    "action_allowlist": [
+      "calendar:read",
+      "calendar:create",
+      "calendar:update",
+      "calendar:invite_internal",
+      "calendar:invite_external",
+      "calendar:find_free_time"
+    ],
+    "action_blocklist": [
+      "calendar:delete",
+      "calendar:cancel_all",
+      "calendar:export_all"
+    ],
+    "max_per_hour": 20,
+    "domain_allowlist": "mycompany.com,partnercompany.com",
+    "required": "organizer_id"
+  }
+}
+```
+
+---
+
+## Applying Business Templates
+
+```bash
+curl -X POST https://uniplex.ai/api/gates \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Customer Support Gate",
+    "profile": "L2",
+    "trusted_issuers": ["issuer:acmecorp.ai"],
+    "template": "customer-support-agent"
+  }'
+```
+
+---
+
+<Card title="Browse All Templates" href="/docs/templates/overview" icon="grid">
+  Back to the full template overview across all 5 categories.
+</Card>

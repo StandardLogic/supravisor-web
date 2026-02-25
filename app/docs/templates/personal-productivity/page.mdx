@@ -1,0 +1,234 @@
+# Personal Productivity Templates
+
+Six templates for personal AI assistants. These start conservative — sensible daily limits, careful defaults around irreversible actions. Once you've watched the agent's behavior in your audit trail for a week and it's behaving well, you can loosen the limits.
+
+The philosophy here: it's easier to expand permissions than to undo an action your agent shouldn't have taken.
+
+---
+
+## 1. Personal Email Agent
+
+**What it does:** Reads your inbox, drafts replies, and sends emails — with limits that prevent runaway sending or outreach to new contacts without your approval.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `email:read, email:send, email:search, email:draft` | No delete or bulk export |
+| `max_per_hour` | `20` | Prevents runaway sending |
+| `no_pii_export` | `true` | No bulk contact export |
+| `action_blocklist` | `email:delete, email:export, email:forward_all` | Irreversible actions blocked |
+
+```json
+{
+  "template": "personal-email-agent",
+  "constraints": {
+    "action_allowlist": ["email:read", "email:send", "email:search", "email:draft"],
+    "max_per_hour": 20,
+    "no_pii_export": true,
+    "read_only": false,
+    "required": "user_context",
+    "action_blocklist": ["email:delete", "email:export", "email:forward_all"]
+  }
+}
+```
+
+<Tip>
+  Add a custom contact-check integration to require approval for any email to a recipient not in your address book.
+</Tip>
+
+---
+
+## 2. Calendar Manager
+
+**What it does:** Schedules meetings, creates events, and manages your calendar — without the ability to delete events or make mass cancellations you can't undo.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `calendar:read, calendar:create, calendar:update` | Explicit no-delete |
+| `action_blocklist` | `calendar:delete, calendar:cancel_all` | No irreversible changes |
+| `max_per_hour` | `20` | Prevent calendar flooding |
+| `required` | `event_title` | Every event must have a title |
+
+```json
+{
+  "template": "calendar-manager",
+  "constraints": {
+    "action_allowlist": [
+      "calendar:read",
+      "calendar:create",
+      "calendar:update",
+      "calendar:search",
+      "calendar:suggest_times"
+    ],
+    "action_blocklist": ["calendar:delete", "calendar:cancel_all"],
+    "max_per_hour": 20,
+    "required": "event_title",
+    "read_only": false
+  }
+}
+```
+
+---
+
+## 3. File Organizer
+
+**What it does:** Renames, moves, and organizes files — without delete permissions. All moves are reversible; all deletes are blocked.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `files:read, files:list, files:rename, files:move` | No delete |
+| `action_blocklist` | `files:delete, files:overwrite` | Irreversible actions blocked |
+| `domain_blocklist` | External cloud services | Stays local |
+
+```json
+{
+  "template": "file-organizer",
+  "constraints": {
+    "action_allowlist": [
+      "files:read",
+      "files:list",
+      "files:rename",
+      "files:move",
+      "files:create"
+    ],
+    "action_blocklist": [
+      "files:delete",
+      "files:overwrite",
+      "files:upload_external"
+    ],
+    "read_only": false,
+    "no_pii_export": true
+  }
+}
+```
+
+---
+
+## 4. Notes and Knowledge Manager
+
+**What it does:** Reads, creates, and updates notes — without deleting or publishing anything externally.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `notes:read, notes:create, notes:update, notes:search` | No delete |
+| `action_blocklist` | `notes:delete, notes:publish_external, notes:share_all` | No bulk operations |
+| `no_pii_export` | `true` | Personal notes may contain sensitive data |
+
+```json
+{
+  "template": "notes-manager",
+  "constraints": {
+    "action_allowlist": [
+      "notes:read",
+      "notes:create",
+      "notes:update",
+      "notes:search",
+      "notes:tag",
+      "notes:link"
+    ],
+    "action_blocklist": [
+      "notes:delete",
+      "notes:publish_external",
+      "notes:export_all",
+      "notes:share_all"
+    ],
+    "no_pii_export": true,
+    "max_per_hour": 30
+  }
+}
+```
+
+---
+
+## 5. Task Manager
+
+**What it does:** Creates, updates, and completes tasks — without bulk deletions or access to data outside the task system.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `tasks:read, tasks:create, tasks:update, tasks:complete` | Scoped to task actions |
+| `action_blocklist` | `tasks:delete_all, tasks:archive_all` | No bulk irreversible operations |
+| `required` | `project_id` | Every task tagged to a project |
+
+```json
+{
+  "template": "task-manager",
+  "constraints": {
+    "action_allowlist": [
+      "tasks:read",
+      "tasks:create",
+      "tasks:update",
+      "tasks:complete",
+      "tasks:assign",
+      "tasks:comment"
+    ],
+    "action_blocklist": [
+      "tasks:delete",
+      "tasks:delete_all",
+      "tasks:archive_all"
+    ],
+    "required": "project_id",
+    "max_per_hour": 50,
+    "read_only": false
+  }
+}
+```
+
+---
+
+## 6. Shopping and Price Research Agent
+
+**What it does:** Researches products, compares prices, and saves items to wish lists — without placing orders or accessing payment methods.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `web:search, web:read, shopping:search, shopping:save_wishlist` | No purchase actions |
+| `action_blocklist` | `shopping:purchase, payments:*` | Never buys anything |
+| `domain_allowlist` | Shopping and review sites | Scoped to relevant domains |
+| `read_only` | `true` | Research only |
+
+```json
+{
+  "template": "shopping-research",
+  "constraints": {
+    "read_only": true,
+    "action_allowlist": [
+      "web:search",
+      "web:read",
+      "shopping:search",
+      "shopping:compare",
+      "shopping:save_wishlist"
+    ],
+    "action_blocklist": [
+      "shopping:purchase",
+      "shopping:add_to_cart",
+      "payments:send",
+      "payments:authorize"
+    ],
+    "domain_allowlist": "amazon.com,google.com,wirecutter.com,rtings.com,reddit.com",
+    "max_per_hour": 30
+  }
+}
+```
+
+---
+
+## Applying Personal Templates
+
+```bash
+# Apply the Calendar Manager template
+curl -X POST https://uniplex.ai/api/gates \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Personal Calendar Gate",
+    "profile": "L2",
+    "trusted_issuers": ["issuer:personal.local"],
+    "template": "calendar-manager"
+  }'
+```
+
+---
+
+<Card title="Browse All Templates" href="/docs/templates/overview" icon="grid">
+  Back to the full template overview across all 5 categories.
+</Card>

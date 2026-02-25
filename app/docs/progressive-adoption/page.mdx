@@ -1,0 +1,211 @@
+# Progressive Adoption
+
+You get value from Supravisor at any layer of the stack. You don't need to implement everything — start where it makes sense for you and add infrastructure as your trust requirements grow.
+
+---
+
+## The Ladder
+
+| Level | What You Use | Infrastructure | Time to Value |
+|-------|-------------|----------------|---------------|
+| **1 — Passport Only** | Passport + SDK enforcement | **None** | 5 minutes |
+| **2 — Gate Only** | Gate + anonymous access | Gate server | 15 minutes |
+| **3 — Passport + Gate** | Full verification + audit trail | Gate server | 30 minutes |
+| **4 — Full Stack** | Issuers, Passports, Gates, Catalogs, Commerce, Attestations | Full platform | Hours |
+
+You can start at any level. You can skip levels. You can mix approaches across your system.
+
+---
+
+## Level 1: Passport Only
+
+**Who it's for:** Builders who want to give their agents policy — spending limits, rate limits, allowed actions — without any backend infrastructure.
+
+**What you do:**
+1. Sign up and create an issuer
+2. Issue a passport for your agent via the dashboard or API
+3. Load the passport JSON in your agent
+4. Check actions against it locally via the SDK
+
+**What the SDK enforces without a gate:**
+- `expires_at` — passport expiry
+- Permission namespaces — `flights:search` must be in the passport's permissions
+- Embedded constraint payload — spending limits, rate limits, domain allowlists
+
+**What requires a gate:**
+- Revocation checks (revoked passports have no local flag)
+- Issuer trust chain verification (L2/L3)
+- Signed attestations (audit trail)
+- Replay protection (L3 nonces)
+
+```python
+from uniplex import Passport
+
+passport = Passport.load("passport.json")
+result = passport.check(action="files:write", resource="/home/user/data.csv")
+
+if result.allowed:
+    proceed_with_write()
+else:
+    # result.decision: PERMIT | SUSPEND | BLOCK
+    print(f"Blocked: {result.reason}")
+```
+
+**Upgrade path:** Add a gate (Level 3) when you need revocation checking, audit logs, or to share trust with external services.
+
+---
+
+## Level 2: Gate Only
+
+**Who it's for:** Service providers who want to control access to their APIs or MCP servers before worrying about which specific agents will use them.
+
+**What you do:**
+1. Create a gate
+2. Enable anonymous access for public resources
+3. Configure `upgrade_url` so agents know where to get credentials
+4. Watch agents self-onboard
+
+**The key insight:** You deploy first. Agents figure out credentials on their own. No coordination required.
+
+```bash
+# 1. Create gate
+curl -X POST https://uniplex.ai/api/gates \
+  -d '{ "name": "Research API", "profile": "L1" }'
+
+# 2. Allow anonymous access to public endpoints
+curl -X PUT https://uniplex.ai/api/gates/gate_research-api/anonymous-policy \
+  -d '{
+    "enabled": true,
+    "allowed_actions": ["research:search"],
+    "rate_limit_per_minute": 5,
+    "upgrade_url": "https://uniplex.ai/issue?gate=gate_research-api"
+  }'
+```
+
+**Upgrade path:** Add trusted issuers (Level 3 with L2 profile) when you want to control exactly which organizations can issue passports your gate accepts.
+
+---
+
+## Level 3: Passport + Gate
+
+**Who it's for:** Teams that want the full trust contract — verified identity, enforced constraints, and a cryptographic audit trail of every decision.
+
+**What you get:**
+- ✅ Signature verification (Ed25519)
+- ✅ Revocation checking (database)
+- ✅ Issuer trust chain (L2/L3)
+- ✅ Constraint enforcement (26 evaluators via CEL)
+- ✅ Signed attestations per decision
+- ✅ Shareable proof links (`/s/[token]`)
+
+```bash
+# Check passport against gate — get signed attestation
+curl -X POST https://uniplex.ai/api/gates/gate_my-api/check \
+  -d '{
+    "passport_json": { "payload": {...}, "signature": "..." },
+    "action": "research:summarize"
+  }'
+```
+
+**Upgrade path:** Add catalogs and billing (Level 4) when you want metered pricing, service discovery, and agent-to-agent commerce.
+
+---
+
+## Level 4: Full Stack
+
+**Who it's for:** Platforms building trust infrastructure at scale — SaaS providers, agent marketplaces, enterprise deployments.
+
+**What you add:**
+- **Catalogs** — publish immutable signed snapshots of your service's capabilities and pricing
+- **Service Discovery** — let agents find your service via `GET /api/discover`
+- **Bilateral Metering** — consumption attestations signed by both parties
+- **Settlement** — monthly billing with batch signature verification
+- **SLA Tracking** — measure and prove compliance with uptime/latency guarantees
+
+**Anti-bait-and-switch guarantee:** Passports pin to the catalog hash at issuance. You can never silently raise prices or remove permissions on agents already operating under contract.
+
+---
+
+## Two Entry Points
+
+You can start from either direction:
+
+```
+ISSUER SIDE                           GATE SIDE
+─────────────────                     ─────────────────
+
+I build agents.                       I protect resources.
+I want my agents to                   I want to control who
+have credentials.                     accesses my APIs.
+
+→ Issue passport                      → Deploy gate
+→ SDK enforces locally                → Anonymous access
+  (no gate needed)                      auto-onboards agents
+→ Add gate later                      → Add issuer trust later
+  when I need audit trail               when I need verified IDs
+```
+
+You don't need the other side to get started. The two sides meet when an issuer-signed passport is presented to an L2/L3 gate.
+
+---
+
+## Entry Point Decision Guide
+
+<AccordionGroup>
+  <Accordion title="I just want to add constraints to my agents">
+    Start with **Level 1 — Passport Only**. Issue a passport with spending limits and permissions. The SDK enforces it locally. No backend.
+    
+    [→ Passport Issuer Quickstart](/docs/quickstart)
+  </Accordion>
+
+  <Accordion title="I want to protect my API from unauthorized agents">
+    Start with **Level 2 — Gate Only**. Deploy a gate, enable anonymous access, and agents self-onboard.
+    
+    [→ Gate Operator Quickstart](/docs/quickstart-gate)
+  </Accordion>
+
+  <Accordion title="I need a full audit trail of agent decisions">
+    Go to **Level 3 — Passport + Gate**. Every authorization produces a signed attestation you can query, share, and verify independently.
+    
+    [→ Gate Operator Quickstart](/docs/quickstart-gate)
+  </Accordion>
+
+  <Accordion title="I'm building a multi-agent marketplace or SaaS platform">
+    Go to **Level 4 — Full Stack**. You want catalogs, service discovery, bilateral metering, and settlement.
+    
+    [→ Commerce Concepts](/docs/concepts/commerce) | [→ Catalogs](/docs/concepts/catalogs)
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## What Never Changes
+
+Regardless of level, these principles hold:
+
+- **Ed25519 everywhere** — all credentials, attestations, and catalog snapshots are cryptographically signed
+- **RFC 8785 canonicalization** — deterministic signing across languages and implementations
+- **Anti-downgrade invariant** — invalid credentials never fall back to anonymous access
+- **Anti-bait-and-switch** — passport version pinning locks you to catalog terms at issuance
+- **No floating-point money** — all amounts are bigint (cents) to prevent precision loss
+- **Issuer private keys never returned** — generated and encrypted server-side; never in an API response
+- **Agent private keys never stored** — client generates and stores; server only sees public key
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Passport Issuer Quickstart" href="/docs/quickstart" icon="robot">
+    Start with Level 1 — no infrastructure needed.
+  </Card>
+  <Card title="Gate Operator Quickstart" href="/docs/quickstart-gate" icon="shield">
+    Start with Level 2 — deploy before your agents are ready.
+  </Card>
+  <Card title="Concepts: Gates" href="/docs/concepts/gates" icon="book">
+    Deep dive into gates, security profiles, and trust configuration.
+  </Card>
+  <Card title="Concepts: Commerce" href="/docs/concepts/commerce" icon="credit-card">
+    Bilateral metering and trustless settlement.
+  </Card>
+</CardGroup>

@@ -1,0 +1,97 @@
+# Use Case: Enterprise Research Agent
+
+<Note>
+  **The moment:** 50 research agents running freely — and a single revoke button if any one of them goes off-script.
+</Note>
+
+An enterprise deploys 50 research agents that query premium data providers. Admins need spending caps, human approval above thresholds, and a compliance-grade audit trail. Agents must never write — only read.
+
+---
+
+## Setup
+
+**Admin creates an L2 gate** for the research service. L2 requires passports from trusted issuers — only agents from `issuer:enterprise.ai` are accepted.
+
+**Admin applies the `read-only-research` template:**
+
+```bash
+POST /api/passports/uni_agent-01/constraints
+{
+  "core:data:read_only": true,
+  "core:rate:max_per_hour": 1000,
+  "core:cost:max_cumulative": 10000,
+  "core:cost:cumulative_window": "daily",
+  "core:cost:approval_threshold": 5000
+}
+```
+
+The `approval_threshold` constraint fires when a single query would cost more than $50. That query is **SUSPEND**ed — it goes into an approval queue instead of executing.
+
+---
+
+## Agent Queries
+
+For a normal $0.50 search query:
+
+```bash
+POST /api/enforce
+{ "passport_id": "uni_agent-01", "action": "research:search", "cost_cents": 50 }
+```
+
+CEL evaluates all evaluators → **PERMIT**. Query proceeds.
+
+---
+
+## Approval Workflow
+
+For an expensive $200 bulk export:
+
+```bash
+POST /api/enforce
+{ "passport_id": "uni_agent-01", "action": "research:export", "cost_cents": 20000 }
+```
+
+CEL: `core:cost:approval_threshold` (20000 > 5000) → **SUSPEND** (HTTP 202)
+
+The decision goes to the admin's approval queue at `/guardrails`. The admin reviews context and approves or rejects. Until resolved, the agent's export does not proceed.
+
+---
+
+## What the Audit Shows
+
+Every query — permitted, suspended, or blocked — produces a signed enforcement attestation. The audit trail at `/audit-trail` shows:
+
+- Agent ID, timestamp, action, decision
+- Which constraint caused a SUSPEND/BLOCK
+- Accumulated spend per agent per day
+
+For regulatory compliance, admins share attestation links:
+
+```
+https://uniplex.ai/s/[share_token]
+```
+
+No auth required. The link shows the signed decision + verification button. Perfect for audit submissions.
+
+---
+
+## Incident Response
+
+If an agent behaves unexpectedly:
+
+```bash
+DELETE /api/gates/gate_research/passports/uni_agent-rogue
+```
+
+Passport revoked immediately. The anti-downgrade invariant ensures it can't fall back to anonymous access. All subsequent requests from that agent are denied.
+
+---
+
+## Key Constraints Used
+
+| Constraint | Value | Effect |
+|-----------|-------|--------|
+| `core:data:read_only` | `true` | BLOCK any write action |
+| `core:rate:max_per_hour` | `1000` | BLOCK if hourly limit exceeded |
+| `core:cost:max_cumulative` | `10000` (daily) | BLOCK if daily budget exceeded |
+| `core:cost:approval_threshold` | `5000` | SUSPEND if single action costs > $50 |

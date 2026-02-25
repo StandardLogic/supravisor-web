@@ -1,0 +1,238 @@
+AI agents with no guardrails are a liability. Let's fix that — fast.
+
+Five minutes. Python or TypeScript. A verified agent with real policy enforcement at the end.
+
+---
+
+## Before You Start
+
+- Python 3.8+ or Node.js 18+
+- A [Supravisor account](https://uniplex.ai/signup) (free tier works)
+
+---
+
+## Step 1: Install the SDK
+
+<CodeGroup>
+```bash Python
+pip install uniplex
+```
+```bash TypeScript
+npm install uniplex
+```
+</CodeGroup>
+
+---
+
+## Step 2: Create an Issuer
+
+Your Issuer is your signing authority — the organization stamp that vouches for every agent you create. Think of it as your own private DMV.
+
+1. Go to your [dashboard](https://uniplex.ai/dashboard)
+2. Click **Issuers** in the left sidebar → **Create Issuer**
+3. Enter a name (e.g. "My Agents") and a domain (e.g. `mycompany.ai`)
+4. Click **Create** — your Ed25519 (a type of digital signature that's mathematically impossible to forge) keypair is generated in your browser
+
+<Note>
+Your issuer's private key is generated in your browser and **never sent to Supravisor**. Keep it safe — it's the root of trust for all your agents.
+</Note>
+
+---
+
+## Step 3: Issue a Passport
+
+A passport is your agent's ID card — a tamper-proof record of who it is and what it's allowed to do.
+
+1. Click **Passports** → **Issue Passport**
+2. Select your issuer
+3. Set an Agent ID (e.g. `research-agent-001`) and name
+4. Choose permissions (e.g. `mcp:*` for MCP tools, `web:search` to scope it tighter)
+5. Set an expiry — 90 days is a good starting point
+6. Click **Issue Passport**
+
+<Warning>
+**Save the private key right now.** It appears exactly once and cannot be recovered. Copy it to a password manager or `.env` file before you do anything else.
+</Warning>
+
+---
+
+## Step 4: Set Your Environment Variable
+
+```bash
+export UNIPLEX_PASSPORT_KEY="your-private-key-here"
+```
+
+Or add it to your `.env` file:
+
+```bash .env
+UNIPLEX_PASSPORT_KEY=your-private-key-here
+```
+
+---
+
+## Step 5: Initialize Your Agent
+
+<CodeGroup>
+```python Python
+import os
+from uniplex import Agent
+
+# Reads UNIPLEX_PASSPORT_KEY from your environment automatically
+agent = Agent.from_env()
+
+# Or load explicitly if you prefer
+agent = Agent(
+    passport_id="uni_xxxxxxxx",
+    private_key=os.environ["UNIPLEX_PASSPORT_KEY"],
+)
+
+print(f"Agent ready: {agent.agent_id}")
+print(f"Permissions: {agent.permissions}")
+print(f"Expires: {agent.expires_at.date()}")
+```
+
+```typescript TypeScript
+import { Agent } from 'uniplex';
+
+// Reads UNIPLEX_PASSPORT_KEY from your environment automatically
+const agent = await Agent.fromEnv();
+
+// Or load explicitly
+const agent = new Agent({
+  passportId: "uni_xxxxxxxx",
+  privateKey: process.env.UNIPLEX_PASSPORT_KEY!,
+});
+
+console.log(`Agent ready: ${agent.agentId}`);
+console.log(`Permissions: ${agent.permissions.join(', ')}`);
+```
+</CodeGroup>
+
+---
+
+## Step 6: Authorize an Action
+
+This is the moment enforcement happens. Every action your agent wants to take runs through this check first.
+
+<CodeGroup>
+```python Python
+# Check if your agent can do something
+decision = agent.authorize("mcp:search")
+
+if decision.allowed:
+    print(f"✓ Authorized — attestation: {decision.attestation_id}")
+    # Your agent proceeds with the action
+else:
+    print(f"✗ Denied: {decision.reason}")
+    # Blocked. The reason tells you exactly why.
+```
+
+```typescript TypeScript
+// Check if your agent can do something
+const decision = await agent.authorize("mcp:search");
+
+if (decision.allowed) {
+  console.log(`✓ Authorized — attestation: ${decision.attestationId}`);
+  // Your agent proceeds with the action
+} else {
+  console.log(`✗ Denied: ${decision.reason}`);
+  // Blocked. The reason tells you exactly why.
+}
+```
+</CodeGroup>
+
+Every `authorize()` call produces an attestation — a signed, tamper-proof record of the decision. That's your audit trail, built automatically.
+
+<Note>
+  **What just happened?** Your agent tried an action. The SDK checked the passport's permission list, verified the signature, and evaluated any constraints — all in-process, with no network call. The answer came back in microseconds. That's it. That's enforcement.
+</Note>
+
+---
+
+## Step 7: Add a Gate (Upgrades Everything)
+
+The steps above give you passport-level enforcement immediately. A Gate adds remote verification, per-gate guardrails, and a full audit trail in the dashboard.
+
+1. Click **Gates** → **Create Gate**
+2. Choose a security level (L1 for dev, L2 for production)
+3. Select which issuers to trust
+4. Apply a template or set custom guardrails
+5. Use the gate ID in your code:
+
+<CodeGroup>
+```python Python
+from uniplex import Gate, TrustProfile
+
+gate = Gate(
+    gate_id="gate_xxxxxxxx",    # From the dashboard
+    profile=TrustProfile.L2,
+    trusted_issuers=["issuer:mycompany.ai"],
+    constraints={
+        "max_per_day": "$50.00",        # Spending cap
+        "max_per_minute": 10,           # Rate limit
+        "domain_allowlist": "openai.com,anthropic.com"  # Allowed domains
+    }
+)
+
+# Now checks against the gate's full ruleset
+decision = gate.authorize(agent.generate_token(), "mcp:search")
+```
+
+```typescript TypeScript
+import { Gate, TrustProfile } from 'uniplex';
+
+const gate = new Gate({
+  gateId: "gate_xxxxxxxx",    // From the dashboard
+  profile: TrustProfile.L2,
+  trustedIssuers: ["issuer:mycompany.ai"],
+  constraints: {
+    maxPerDay: "$50.00",        // Spending cap
+    maxPerMinute: 10,           // Rate limit
+    domainAllowlist: "openai.com,anthropic.com"  // Allowed domains
+  }
+});
+
+const decision = await gate.authorize(agent.generateToken(), "mcp:search");
+```
+</CodeGroup>
+
+---
+
+## What You Just Built
+
+You have:
+- ✅ An AI agent with a verified, cryptographic identity
+- ✅ Policy enforcement on every action it takes
+- ✅ A signed audit trail that can't be altered
+- ✅ One-click revocation if anything goes wrong
+
+---
+
+## Where You Are — And Where You Can Go
+
+You're currently at **Level 1** of progressive adoption. Each level adds more:
+
+| Level | What You Use | Infrastructure | Time to Value |
+|-------|-------------|----------------|---------------|
+| **1 — Passport Only** | Passport + SDK enforcement | **None** | 5 minutes |
+| **2 — Gate Only** | Gate + anonymous access | Gate server | 15 minutes |
+| **3 — Passport + Gate** | Full verification + audit trail | Gate server | 30 minutes |
+| **4 — Full Stack** | Issuers, Passports, Gates, Catalogs, Commerce, Attestations | Full platform | Hours |
+
+Step 7 above moves you to Level 3. You don't have to do it today.
+
+---
+
+## What's Next
+
+<CardGroup cols={3}>
+  <Card title="Core Concepts" icon="book" href="/docs/concepts/passports">
+    Understand Passports, Gates, Guardrails, and Attestations in depth.
+  </Card>
+  <Card title="Templates" icon="layers" href="/docs/templates/overview">
+    30 pre-built constraint profiles — pick one and go.
+  </Card>
+  <Card title="MCP Server" icon="plug" href="/docs/guides/mcp-server">
+    Connect Claude or any MCP client to Supravisor with 21 tools.
+  </Card>
+</CardGroup>

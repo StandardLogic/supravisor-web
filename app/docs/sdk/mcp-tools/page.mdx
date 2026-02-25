@@ -1,0 +1,513 @@
+# MCP Tools
+
+The Supravisor MCP server exposes **32 tools** covering the full platform — passports, gates, constraints, catalogs, commerce, discovery, and audit. Use it from Claude Desktop or any MCP-compatible client.
+
+**Endpoint:** `POST https://uniplex.ai/api/mcp`  
+**Protocol:** Streamable HTTP, JSON-RPC 2.0  
+**Auth:** OAuth Bearer token or API key
+
+---
+
+## Setup
+
+### With Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "supravisor": {
+      "url": "https://uniplex.ai/api/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Get your API key from the dashboard at **Settings → API Keys**. Required scope: depends on which tools you want to use (see each tool's scope below).
+
+### API Key Scopes
+
+| Tools | Required Scope |
+|-------|---------------|
+| Read passports, gates, catalogs | `gates:read`, `passports:read` |
+| Issue/revoke passports | `passports:issue`, `passports:revoke` |
+| Create/update gates | `gates:create`, `gates:manage` |
+| Set constraints | `constraints:write` |
+| Publish catalogs | `catalog:create` |
+| Commerce / consumption | `consume:write`, `billing:write` |
+| Full access | `admin:*` |
+
+---
+
+## Tool Reference
+
+### Passport Tools
+
+#### `create_passport`
+Issue a new passport signed by an issuer.
+
+```json
+{
+  "issuer_id": "issuer:mycompany.ai",
+  "agent_id": "travel-agent-01",
+  "agent_name": "Travel Agent",
+  "permissions": ["flights:search", "flights:book"],
+  "expires_in": "30d",
+  "agent_public_key": "MCowBQYDK2VwAyEA..."
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `issuer_id` | `string` | ✅ | Must be `issuer:<domain>` format. `self` not supported. |
+| `agent_id` | `string` | ✅ | Agent slug (lowercase, hyphens) |
+| `agent_name` | `string` | ❌ | Display name |
+| `permissions` | `string[]` | ✅ | Permission namespaces |
+| `expires_in` | `string` | ❌ | Duration: `1h`, `24h`, `7d`, `30d` (default: `24h`) |
+| `agent_public_key` | `string` | ✅ | Client-generated Ed25519 public key (base64). Server never generates or returns private keys. |
+
+Returns: `passport_id`, `passport_json`, `expires_at`
+
+---
+
+#### `list_passports`
+List passports, optionally filtered by issuer.
+
+```json
+{ "issuer_id": "issuer:mycompany.ai" }
+```
+
+---
+
+#### `revoke_passport`
+Immediately revoke a passport.
+
+```json
+{ "passport_id": "uni_abc123" }
+```
+
+---
+
+#### `reissue_passport`
+Re-issue a passport pinned to a new catalog version (agent consents to new terms).
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "accept_catalog_version": 4
+}
+```
+
+Returns: `new_passport_id`, `passport_json`, `terms_changed`, `has_breaking_changes`, `changes[]`
+
+---
+
+### Issuer Tools
+
+#### `list_issuers`
+List the user's issuers.
+
+```json
+{}
+```
+
+---
+
+### Gate Tools
+
+#### `create_gate`
+Create a new authorization gate.
+
+```json
+{
+  "gate_id": "gate_prod-api",
+  "name": "Production API",
+  "security_profile": "L2",
+  "is_discoverable": true
+}
+```
+
+---
+
+#### `list_gates`
+List the user's gates.
+
+```json
+{}
+```
+
+---
+
+#### `check_gate`
+Test a passport against a gate. Creates an attestation.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "passport_json": { "payload": { ... }, "signature": "..." },
+  "action": "flights:search",
+  "target": "JFK-LAX",
+  "dry_run": false
+}
+```
+
+Returns: `allowed`, `decision`, `reason_code`, `attestation`
+
+---
+
+#### `set_anonymous_policy`
+Configure anonymous access for a gate.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "policy": {
+    "enabled": true,
+    "allowed_actions": ["catalog:read"],
+    "read_only": true,
+    "rate_limit_per_minute": 10,
+    "rate_limit_per_hour": 100,
+    "upgrade_message": "Get a passport for full access.",
+    "upgrade_url": "https://example.com/signup"
+  }
+}
+```
+
+---
+
+#### `get_anonymous_policy`
+Read a gate's current anonymous access policy.
+
+```json
+{ "gate_id": "gate_def456" }
+```
+
+---
+
+### Constraint Tools
+
+#### `set_constraints`
+Set constraint overrides on a passport.
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "constraints": {
+    "core:cost:max_per_action": 10000,
+    "core:rate:max_per_minute": 5,
+    "core:data:read_only": true
+  }
+}
+```
+
+---
+
+#### `get_constraints`
+Get the constraints on a passport.
+
+```json
+{ "passport_id": "uni_abc123" }
+```
+
+---
+
+#### `list_constraint_types`
+List all available constraint definitions.
+
+```json
+{ "category": "cost" }
+```
+
+Categories: `temporal`, `scope`, `rate`, `cost`, `approval`, `data`, `pricing`, `sla`, `platform_fee`
+
+---
+
+#### `enforce_action`
+Run CEL constraint evaluation for a passport + action.
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "action": "flights:book",
+  "target": "JFK-LAX",
+  "cost_cents": 50000,
+  "metadata": { "booking_ref": "BK123" }
+}
+```
+
+Returns: `decision` (PERMIT/SUSPEND/BLOCK), `reason`, `enforcement_attestation_id`, `evaluator_results[]`
+
+---
+
+#### `get_cumulative_state`
+Get spending and rate limit counters for a passport.
+
+```json
+{ "passport_id": "uni_abc123" }
+```
+
+---
+
+#### `reset_cumulative_state`
+Reset spending/rate counters (useful for testing).
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "window_type": "daily"
+}
+```
+
+---
+
+### Catalog Tools
+
+#### `publish_catalog`
+Build, sign, and publish an immutable catalog snapshot.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "change_summary": "Added hotels:search",
+  "effective_at": "2026-03-01T00:00:00Z"
+}
+```
+
+---
+
+#### `get_catalog`
+Fetch a published catalog by version.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "version": 3
+}
+```
+
+---
+
+#### `list_catalog_versions`
+List all published catalog versions for a gate.
+
+```json
+{ "gate_id": "gate_def456" }
+```
+
+---
+
+### Attestation Tools
+
+#### `get_attestations`
+Get recent authorization decisions for a gate.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "limit": 20
+}
+```
+
+---
+
+#### `verify_attestation`
+Verify the Ed25519 signature on an attestation.
+
+```json
+{ "attestation_id": "att_xyz789" }
+```
+
+Returns: `valid`, `signer_public_key`, `decision`, `signed_at`
+
+---
+
+#### `get_enforcement_attestations`
+Get CEL enforcement decision records.
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "limit": 20
+}
+```
+
+---
+
+#### `get_enforcement_attestation`
+Get a single enforcement attestation with full evaluator results.
+
+```json
+{ "attestation_id": "enf_pqr012" }
+```
+
+---
+
+#### `verify_enforcement_attestation`
+Verify signature and chain integrity on an enforcement attestation.
+
+```json
+{ "attestation_id": "enf_pqr012" }
+```
+
+---
+
+### Constraint Template Tools
+
+#### `list_constraint_templates`
+List system and user-created constraint templates.
+
+```json
+{ "category": "security" }
+```
+
+Categories: `industry`, `role`, `security`, `commerce`
+
+---
+
+#### `apply_constraint_template`
+Apply a template's constraints to a passport.
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "template_slug": "read-only-research"
+}
+```
+
+---
+
+### Commerce & Billing Tools
+
+#### `discover_services`
+Trustless public service discovery.
+
+```json
+{
+  "capability": "flights:*",
+  "max_price_cents": 100,
+  "min_uptime_bp": 9990,
+  "sort": "price_asc",
+  "limit": 10
+}
+```
+
+---
+
+#### `issue_consumption_attestation`
+Record a billable interaction (bilateral metering).
+
+```json
+{
+  "passport_id": "uni_abc123",
+  "gate_id": "gate_def456",
+  "action": "flights:book",
+  "outcome": "success",
+  "quantity": 1,
+  "agent_pop": { ... }
+}
+```
+
+---
+
+#### `generate_settlement`
+Aggregate consumption attestations into a billing period settlement.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "period_type": "monthly",
+  "period_start": "2026-02-01T00:00:00Z",
+  "period_end": "2026-03-01T00:00:00Z"
+}
+```
+
+---
+
+#### `get_billing_summary`
+List settlements with rich filtering.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "status": "pending",
+  "limit": 20
+}
+```
+
+---
+
+#### `update_settlement_status`
+Transition a settlement through its status machine.
+
+```json
+{
+  "settlement_id": "stl_abc123",
+  "status": "invoiced"
+}
+```
+
+---
+
+#### `get_sla_compliance`
+Measure SLA performance against catalog guarantees.
+
+```json
+{
+  "gate_id": "gate_def456",
+  "period_start": "2026-02-01T00:00:00Z",
+  "period_end": "2026-03-01T00:00:00Z"
+}
+```
+
+---
+
+## Tool Count Summary
+
+| Group | Tools |
+|-------|-------|
+| Passport | 4 |
+| Issuer | 1 |
+| Gate | 7 |
+| Constraint | 6 |
+| Catalog | 3 |
+| Attestation | 5 |
+| Templates | 2 |
+| Commerce & Billing | 6 |
+| **Total** | **34** |
+
+---
+
+## Example: Full Workflow with Claude
+
+Ask Claude to:
+
+> "Create a gate called 'Research API' at L2 security, add my issuer:mycompany.ai as a trusted issuer, set rate limits of 100 req/hour and a $20/day spending cap, then issue a passport for my research-agent."
+
+Claude will:
+1. Call `create_gate` with profile L2
+2. Use the dashboard or API to add the trusted issuer
+3. Call `set_constraints` with the rate/cost limits
+4. Call `create_passport` with your issuer + agent details
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Keys" href="/docs/api-reference/authentication" icon="key">
+    Create API keys with the right scopes for MCP.
+  </Card>
+  <Card title="Gates API" href="/docs/api-reference/gates" icon="shield">
+    Full REST reference for gate operations.
+  </Card>
+  <Card title="Commerce API" href="/docs/api-reference/commerce" icon="credit-card">
+    Consumption, settlement, and SLA via REST.
+  </Card>
+  <Card title="Discovery API" href="/docs/api-reference/discovery" icon="search">
+    Public service discovery.
+  </Card>
+</CardGroup>

@@ -1,0 +1,252 @@
+# Quickstart: Gate Operator
+
+You protect resources — APIs, MCP tools, data endpoints. You want to control which agents can access them, enforce constraints, and get a cryptographic audit trail.
+
+The key insight: **you don't need agents to have passports yet**. Deploy your gate, configure anonymous access, and agents self-onboard automatically.
+
+<Note>
+  This is the **Gate Operator** path. If you're building AI agents that need credentials, see the [Passport Issuer Quickstart →](/docs/quickstart)
+</Note>
+
+## Prerequisites
+
+- A [Supravisor account](https://uniplex.ai/signup) (free)
+- An API key — get one at **Settings → API Keys**
+
+## Step 1: Install the SDK
+
+<CodeGroup>
+```bash npm
+npm install uniplex
+```
+
+```bash pip
+pip install uniplex
+```
+</CodeGroup>
+
+## Step 2: Create a Gate
+
+A gate is an authorization checkpoint. Every request to your protected resource passes through it.
+
+```bash
+curl -X POST https://uniplex.ai/api/gates \
+  -H "Authorization: Bearer $UNIPLEX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My API Gate",
+    "gate_id": "gate_my-api",
+    "profile": "L1",
+    "allow_self_issued": true,
+    "is_discoverable": false
+  }'
+```
+
+**Security profiles:**
+- **L1** — Accept any valid passport (great for development; allows self-issued)
+- **L2** — Require passports from trusted issuers (production default)
+- **L3** — Add proof-of-possession for high-value resources
+
+**Response:**
+```json
+{
+  "gate_id": "gate_my-api",
+  "name": "My API Gate",
+  "profile": "L1",
+  "status": "active",
+  "created_at": "2026-02-24T12:00:00Z"
+}
+```
+
+## Step 3: Verify a Passport Against Your Gate
+
+When an agent makes a request, check their passport:
+
+```bash
+curl -X POST https://uniplex.ai/api/gates/gate_my-api/check \
+  -H "Authorization: Bearer $UNIPLEX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "passport_json": { "payload": { ... }, "signature": "..." },
+    "action": "api:read",
+    "target": "/data/reports"
+  }'
+```
+
+**Response (allow):**
+```json
+{
+  "decision": "allow",
+  "reason_code": null,
+  "attestation": {
+    "attestation_id": "att_xyz789",
+    "attestation_json": { ... },
+    "signature": "base64_ed25519_signature...",
+    "attester_public_key": "base64_gate_public_key..."
+  }
+}
+```
+
+Every allow/deny produces a signed attestation — cryptographic proof of the decision.
+
+## Step 4: Add to Your API Middleware
+
+<CodeGroup>
+```typescript Node.js
+import express from 'express';
+import fetch from 'node-fetch';
+
+const app = express();
+
+async function checkPassport(passportJson: object, action: string): Promise<boolean> {
+  const res = await fetch(`https://uniplex.ai/api/gates/gate_my-api/check`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.UNIPLEX_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ passport_json: passportJson, action }),
+  });
+
+  const result = await res.json();
+  return result.decision === 'allow';
+}
+
+app.get('/data/reports', async (req, res) => {
+  const passportHeader = req.headers['x-uniplex-passport'];
+
+  if (!passportHeader) {
+    // Return upgrade URL for agents to self-onboard
+    return res.status(401).json({
+      error: 'passport_required',
+      passport_required_url: 'https://uniplex.ai/issue?gate=gate_my-api',
+      message: 'Get a passport to access this API.',
+    });
+  }
+
+  const passport = JSON.parse(passportHeader as string);
+  const allowed = await checkPassport(passport, 'api:read');
+
+  if (!allowed) {
+    return res.status(403).json({ error: 'access_denied' });
+  }
+
+  res.json({ reports: [ ... ] });
+});
+```
+
+```python FastAPI
+import os
+import httpx
+from fastapi import FastAPI, Request, HTTPException
+import json
+
+app = FastAPI()
+GATE_ID = "gate_my-api"
+API_KEY = os.environ["UNIPLEX_API_KEY"]
+
+async def check_passport(passport_json: dict, action: str) -> bool:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"https://uniplex.ai/api/gates/{GATE_ID}/check",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            json={"passport_json": passport_json, "action": action},
+        )
+        result = resp.json()
+        return result.get("decision") == "allow"
+
+@app.get("/data/reports")
+async def get_reports(request: Request):
+    passport_header = request.headers.get("x-uniplex-passport")
+
+    if not passport_header:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "passport_required",
+                "passport_required_url": f"https://uniplex.ai/issue?gate={GATE_ID}",
+                "message": "Get a passport to access this API.",
+            },
+        )
+
+    passport = json.loads(passport_header)
+    allowed = await check_passport(passport, "api:read")
+
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return {"reports": [...]}
+```
+</CodeGroup>
+
+## Step 5: Enable Anonymous Access (Optional)
+
+Allow some actions without a passport, with automatic onboarding:
+
+```bash
+curl -X PUT https://uniplex.ai/api/gates/gate_my-api/anonymous-policy \
+  -H "Authorization: Bearer $UNIPLEX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "allowed_actions": ["api:status", "api:catalog"],
+    "read_only": true,
+    "rate_limit_per_minute": 10,
+    "rate_limit_per_hour": 100,
+    "upgrade_message": "Get a free API key for full access.",
+    "upgrade_url": "https://uniplex.ai/issue?gate=gate_my-api"
+  }'
+```
+
+Now unauthenticated agents can hit public endpoints, and your protected endpoints return a structured 401 pointing them to get credentials.
+
+<Warning>
+  An agent presenting an **invalid passport** (expired, revoked, tampered) is **always denied** — it never falls back to anonymous access. This prevents downgrade attacks.
+</Warning>
+
+## Step 6: Add Constraints (Optional)
+
+Set spending caps, rate limits, and access controls:
+
+```bash
+# Apply the read-only research template to a passport
+curl -X PUT https://uniplex.ai/api/passports/uni_abc123/constraints \
+  -H "Authorization: Bearer $UNIPLEX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "core:rate:max_per_minute": 10,
+    "core:rate:max_per_hour": 1000,
+    "core:cost:max_per_action": 500,
+    "core:cost:max_cumulative": 5000,
+    "core:data:read_only": true
+  }'
+```
+
+## Step 7: View Your Audit Trail
+
+Every authorization decision is visible in the dashboard at `/attestations` and `/audit-trail`. Share any decision:
+
+```
+https://uniplex.ai/s/[share_token]
+```
+
+No auth required — anyone can verify the signed attestation.
+
+---
+
+## What's Next
+
+<CardGroup cols={2}>
+  <Card title="Anonymous Access" href="/docs/concepts/anonymous-access" icon="eye">
+    Full anonymous access configuration reference.
+  </Card>
+  <Card title="Upgrade to L2" href="/docs/concepts/gates" icon="shield">
+    Require trusted issuers for production security.
+  </Card>
+  <Card title="Publish a Catalog" href="/docs/concepts/catalogs" icon="book">
+    Define your service's capabilities with anti-bait-and-switch pricing.
+  </Card>
+  <Card title="26 Constraint Evaluators" href="/docs/concepts/guardrails" icon="sliders">
+    Full list of available guardrails.
+  </Card>
+</CardGroup>

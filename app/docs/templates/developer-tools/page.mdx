@@ -1,0 +1,264 @@
+# Developer Tool Templates
+
+Six templates for AI agents in developer workflows. The pattern here is almost always the same: read everything, write carefully, never push or merge without explicit human action.
+
+A code review agent that can push to main is not a code review agent. A security scanner that auto-patches is a security incident waiting to happen. These templates are built around that principle.
+
+---
+
+## 1. Code Review Agent
+
+**What it does:** Reads pull requests, analyzes code changes, and posts review comments — without the ability to push code, merge branches, or touch repository settings.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `git:read, git:read_diff, pr:comment, pr:review` | Read + comment only |
+| `action_blocklist` | `git:push, git:merge, git:delete_branch, git:force_push` | No code changes |
+| `domain_allowlist` | `github.com, gitlab.com` | Repo platforms only |
+| `required` | `pr_id` | Every action tagged to a PR |
+
+```json
+{
+  "template": "code-review-agent",
+  "constraints": {
+    "action_allowlist": [
+      "git:read",
+      "git:read_diff",
+      "git:read_commits",
+      "pr:comment",
+      "pr:review",
+      "pr:request_changes",
+      "pr:approve"
+    ],
+    "action_blocklist": [
+      "git:push",
+      "git:merge",
+      "git:force_push",
+      "git:delete_branch",
+      "git:delete_repo",
+      "pr:close",
+      "pr:delete"
+    ],
+    "domain_allowlist": "github.com,gitlab.com,bitbucket.org",
+    "required": "pr_id",
+    "max_per_hour": 30
+  }
+}
+```
+
+<Tip>
+  Add your internal GitLab or GitHub Enterprise domain to `domain_allowlist` if you're self-hosted.
+</Tip>
+
+---
+
+## 2. CI/CD Agent
+
+**What it does:** Monitors pipelines, triggers test runs, reads build logs, and reports on failures — without the ability to deploy to production or modify pipeline configuration.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `ci:read, ci:trigger_test, ci:read_logs` | Trigger tests, not deploys |
+| `action_blocklist` | `ci:deploy_prod, ci:modify_config, ci:delete_pipeline` | Hard blocks |
+| `domain_allowlist` | CI/CD platforms only | Scoped to known services |
+
+```json
+{
+  "template": "cicd-agent",
+  "constraints": {
+    "action_allowlist": [
+      "ci:read_pipeline",
+      "ci:read_logs",
+      "ci:trigger_test",
+      "ci:retry_failed",
+      "ci:read_artifacts"
+    ],
+    "action_blocklist": [
+      "ci:deploy_production",
+      "ci:deploy_staging",
+      "ci:modify_config",
+      "ci:delete_pipeline",
+      "ci:update_secrets"
+    ],
+    "domain_allowlist": "github.com,gitlab.com,circleci.com,buildkite.com,jenkins.internal",
+    "max_per_hour": 20,
+    "required": "pipeline_id"
+  }
+}
+```
+
+---
+
+## 3. Documentation Generator
+
+**What it does:** Reads source code and generates or updates documentation — with write access to docs directories only, never to source code.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `files:read, docs:read, docs:write` | Code read, docs write |
+| `action_blocklist` | `code:write, files:delete, git:push_code` | No code changes |
+
+```json
+{
+  "template": "documentation-generator",
+  "constraints": {
+    "action_allowlist": [
+      "files:read",
+      "code:read",
+      "docs:read",
+      "docs:write",
+      "docs:create",
+      "docs:update"
+    ],
+    "action_blocklist": [
+      "code:write",
+      "files:delete",
+      "git:push",
+      "docs:delete",
+      "docs:publish_external"
+    ],
+    "max_per_hour": 50,
+    "read_only": false
+  }
+}
+```
+
+---
+
+## 4. Bug Triage Agent
+
+**What it does:** Reads bug reports, adds labels, assigns priorities, and links related issues — without the ability to close, delete, or lock issues without human review.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `action_allowlist` | `issues:read, issues:label, issues:assign, issues:comment` | Read + metadata |
+| `action_blocklist` | `issues:close, issues:delete, issues:lock` | No closing/deletion |
+| `required` | `issue_id` | Every action tagged to an issue |
+
+```json
+{
+  "template": "bug-triage-agent",
+  "constraints": {
+    "action_allowlist": [
+      "issues:read",
+      "issues:label",
+      "issues:assign",
+      "issues:comment",
+      "issues:link_related",
+      "issues:set_priority",
+      "issues:search"
+    ],
+    "action_blocklist": [
+      "issues:close",
+      "issues:delete",
+      "issues:lock",
+      "issues:mark_duplicate",
+      "issues:bulk_close"
+    ],
+    "required": "issue_id",
+    "domain_allowlist": "github.com,gitlab.com,linear.app,jira.mycompany.com",
+    "max_per_hour": 50
+  }
+}
+```
+
+---
+
+## 5. Security Scanner
+
+**What it does:** Performs read-only security analysis — finding CVEs in dependencies, flagging hardcoded secrets, identifying insecure patterns — without making any automatic fixes.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `read_only` | `true` | Absolute — no auto-fixes |
+| `action_allowlist` | `files:read, deps:read, git:read` | Read-only analysis |
+| `no_pii_export` | `true` | No credential export in output |
+| `domain_allowlist` | Security databases only | CVE lookups only |
+
+```json
+{
+  "template": "security-scanner",
+  "constraints": {
+    "read_only": true,
+    "action_allowlist": [
+      "files:read",
+      "code:read",
+      "deps:read",
+      "git:read",
+      "vulnerabilities:lookup"
+    ],
+    "action_blocklist": [
+      "files:write",
+      "code:patch",
+      "deps:update",
+      "git:push",
+      "deps:auto_fix"
+    ],
+    "domain_allowlist": "nvd.nist.gov,osv.dev,snyk.io,cve.mitre.org",
+    "no_pii_export": true
+  }
+}
+```
+
+<Warning>
+  Even in read-only mode, a security scanner accesses sensitive code. Scope the passport's permissions to specific repository paths — not the entire file system.
+</Warning>
+
+---
+
+## 6. Dependency Auditor
+
+**What it does:** Runs audit commands, reads the output, and generates a report with severity and remediation steps — without updating any packages or modifying lock files.
+
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| `read_only` | `true` | Audit only — no updates |
+| `action_allowlist` | `deps:audit, deps:read, files:read` | Audit commands + read |
+| `action_blocklist` | `deps:update, deps:install, deps:remove` | No package changes |
+
+```json
+{
+  "template": "dependency-auditor",
+  "constraints": {
+    "read_only": true,
+    "action_allowlist": [
+      "deps:audit",
+      "deps:read_lockfile",
+      "deps:read_manifest",
+      "files:read",
+      "vulnerabilities:lookup"
+    ],
+    "action_blocklist": [
+      "deps:install",
+      "deps:update",
+      "deps:remove",
+      "deps:patch",
+      "files:write"
+    ],
+    "domain_allowlist": "registry.npmjs.org,pypi.org,osv.dev,nvd.nist.gov",
+    "max_per_hour": 20
+  }
+}
+```
+
+---
+
+## Applying Developer Templates
+
+```bash
+curl -X POST https://uniplex.ai/api/gates \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Code Review Gate",
+    "profile": "L2",
+    "trusted_issuers": ["issuer:engineering.mycompany.ai"],
+    "template": "code-review-agent"
+  }'
+```
+
+---
+
+<Card title="Browse All Templates" href="/docs/templates/overview" icon="grid">
+  Back to the full template overview across all 5 categories.
+</Card>

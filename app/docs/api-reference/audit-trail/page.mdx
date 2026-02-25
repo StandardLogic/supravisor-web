@@ -1,0 +1,272 @@
+# Audit Trail API
+
+Every gate decision — allow or deny — is recorded as a signed attestation. The audit trail contains these records. Each is signed by the gate's Ed25519 private key at the moment of the decision. Once signed, any alteration is detectable by anyone with the gate's public key.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## List Attestations
+
+Query authorization decisions with flexible filtering.
+
+```
+GET /api/audit-trail
+```
+
+**Required scope:** `audit:read`
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent_id` | string | Filter by agent ID |
+| `gate_id` | string | Filter by gate ID |
+| `passport_id` | string | Filter by passport ID |
+| `decision` | string | `allow` or `deny` |
+| `action` | string | Filter by action (e.g., `web:search`) |
+| `from` | string | ISO 8601 start timestamp |
+| `to` | string | ISO 8601 end timestamp |
+| `limit` | integer | Results per page (default: 50, max: 500) |
+| `offset` | integer | Pagination offset |
+| `sort` | string | `asc` or `desc` by timestamp (default: `desc`) |
+
+**Example Requests:**
+
+```bash
+# Last 50 decisions
+curl "https://uniplex.ai/api/audit-trail" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G --data-urlencode "limit=50"
+
+# All denials for a specific agent
+curl "https://uniplex.ai/api/audit-trail" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "agent_id=research-bot" \
+  --data-urlencode "decision=deny" \
+  --data-urlencode "limit=50"
+
+# All decisions in February
+curl "https://uniplex.ai/api/audit-trail" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -G \
+  --data-urlencode "from=2026-02-01T00:00:00Z" \
+  --data-urlencode "to=2026-02-28T23:59:59Z"
+```
+
+**Response:**
+
+```json
+{
+  "attestations": [
+    {
+      "attestation_id": "att_xyz789",
+      "decision": "allow",
+      "reason": "All constraints satisfied",
+      "passport_id": "uni_abc123",
+      "agent_id": "research-bot",
+      "agent_name": "Research Bot",
+      "gate_id": "gate_def456",
+      "gate_name": "Research Gate",
+      "action": "web:search",
+      "resource": "google.com",
+      "timestamp": "2026-02-24T10:30:00Z",
+      "trust_profile": "L2"
+    }
+  ],
+  "total": 1243,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+## Get Single Attestation
+
+Retrieve a single attestation with its full constraint evaluation log and gate signature.
+
+```
+GET /api/audit-trail/:attestation_id
+```
+
+**Required scope:** `audit:read`
+
+```bash
+curl https://uniplex.ai/api/audit-trail/att_xyz789 \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:**
+
+```json
+{
+  "attestation_id": "att_xyz789",
+  "decision": "allow",
+  "reason": "All constraints satisfied",
+  "passport_id": "uni_abc123",
+  "agent_id": "research-bot",
+  "agent_name": "Research Bot",
+  "gate_id": "gate_def456",
+  "gate_name": "Research Gate",
+  "action": "web:search",
+  "resource": "google.com",
+  "timestamp": "2026-02-24T10:30:00Z",
+  "trust_profile": "L2",
+  "issuer_id": "issuer:mycompany.ai",
+  "constraints_evaluated": [
+    {
+      "type": "max_per_day",
+      "value": "$50.00",
+      "current": "$12.40",
+      "result": "pass",
+      "detail": "Daily spend $12.40 of $50.00 limit"
+    },
+    {
+      "type": "domain_allowlist",
+      "value": "google.com,arxiv.org,wikipedia.org",
+      "current": "google.com",
+      "result": "pass",
+      "detail": "Target domain google.com is in allowlist"
+    }
+  ],
+  "gate_signature": "Ed25519-base64_signature_over_all_fields..."
+}
+```
+
+The `gate_signature` covers every other field in the document. Verify it independently using the gate's public key — see [Attestations → Verifying Signatures Offline](/docs/concepts/attestations).
+
+---
+
+## Verify Attestation Signature
+
+Verify an attestation's Ed25519 signature via API without doing the verification locally.
+
+```
+POST /api/audit-trail/:attestation_id/verify
+```
+
+**Required scope:** `audit:read`
+
+```bash
+curl -X POST https://uniplex.ai/api/audit-trail/att_xyz789/verify \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+**Response:**
+
+```json
+{
+  "attestation_id": "att_xyz789",
+  "valid": true,
+  "signer_public_key": "base64_gate_public_key...",
+  "decision": "allow",
+  "signed_at": "2026-02-24T10:30:00Z"
+}
+```
+
+If `valid` is `false`, the attestation has been tampered with.
+
+---
+
+## Share Attestation
+
+Generate a public URL for sharing an attestation as proof. Recipients can verify the signature without a Supravisor account.
+
+```
+POST /api/audit-trail/:attestation_id/share
+```
+
+**Required scope:** `audit:share`
+
+```bash
+curl -X POST https://uniplex.ai/api/audit-trail/att_xyz789/share \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"expires_in": "30d"}'
+```
+
+**Response:**
+
+```json
+{
+  "attestation_id": "att_xyz789",
+  "share_url": "https://uniplex.ai/proof/att_xyz789_sharetoken",
+  "expires_at": "2026-03-24T10:30:00Z"
+}
+```
+
+The public URL shows the decision, action, agent name, constraints evaluated, and gate signature. It does not expose API keys, gate configuration, or internal details.
+
+---
+
+## Export Attestations
+
+Export attestations as JSON or CSV for compliance, client reporting, or archival.
+
+```
+GET /api/audit-trail/export
+```
+
+**Required scope:** `audit:export`
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `format` | string | `json` or `csv` |
+| `agent_id` | string | Filter by agent ID |
+| `gate_id` | string | Filter by gate ID |
+| `decision` | string | `allow` or `deny` |
+| `from` | string | ISO 8601 start timestamp |
+| `to` | string | ISO 8601 end timestamp |
+
+```bash
+# Export Q1 2026 as signed JSON
+curl "https://uniplex.ai/api/audit-trail/export?format=json&from=2026-01-01&to=2026-03-31" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -o q1-2026-audit.json
+
+# Export all denials in February as CSV
+curl "https://uniplex.ai/api/audit-trail/export?format=csv&decision=deny&from=2026-02-01&to=2026-02-28" \
+  -H "Authorization: Bearer uni_xxxx" \
+  -o february-denials.csv
+```
+
+JSON exports include `gate_signature` on every record, enabling independent verification. CSV exports include all fields except the signature (use JSON for compliance-grade exports).
+
+---
+
+## Response Fields Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `attestation_id` | string | Unique ID, prefixed `att_` |
+| `decision` | string | `allow` or `deny` |
+| `reason` | string | Plain English explanation — always present |
+| `passport_id` | string | The passport that was presented |
+| `agent_id` | string | The agent slug |
+| `agent_name` | string | The human-readable agent name |
+| `gate_id` | string | The gate that made the decision |
+| `gate_name` | string | The gate's human-readable name |
+| `action` | string | The action that was requested |
+| `resource` | string | The target resource (if provided) |
+| `timestamp` | string | ISO 8601 UTC — when the decision was made |
+| `trust_profile` | string | L1, L2, or L3 |
+| `issuer_id` | string | The issuer of the passport that was checked |
+| `constraints_evaluated` | array | Every constraint checked, with current values and results |
+| `gate_signature` | string | Ed25519 signature over all other fields |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Audit Trail Guide" href="/docs/guides/audit-trail" icon="file-lines">
+    Query, export, and share your agent's decision history.
+  </Card>
+  <Card title="Attestations" href="/docs/concepts/attestations" icon="file-certificate">
+    How attestation signing and verification works.
+  </Card>
+</CardGroup>

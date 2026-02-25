@@ -1,0 +1,190 @@
+# Service Catalogs
+
+A service catalog is the public menu for your gate.
+
+It tells other agents (and developers building agents) exactly what your service offers, what each action costs, what the rate limits are, and what uptime you're committing to. Agents can discover your service, read the catalog, verify it cryptographically, and decide whether to integrate — all before presenting a single credential.
+
+Think of it like a signed contract pinned to the front of your building. Anyone can read it. No one can change it after the fact. And agents can verify the signature themselves without trusting an intermediary.
+
+---
+
+## What's in a Catalog
+
+A catalog snapshot describes your gate's:
+
+- **Capabilities** — which actions are available (e.g., `flights:search`, `hotels:book`)
+- **Pricing** — the cost per action, pricing model (per-call, per-minute, subscription)
+- **SLA commitments** — uptime guarantees in basis points, response time targets
+- **Rate limits** — how many requests a consuming agent can make
+- **Terms and conditions** — usage policy, acceptable use constraints
+
+Each catalog snapshot is immutable once published. New terms require a new snapshot (a new version). Agents that have accepted previous terms are notified of changes and must re-accept breaking changes before they can continue transacting.
+
+---
+
+## Why This Matters for Agents
+
+Without a catalog, an agent has to guess what your service does, what it costs, and whether it's reliable enough. With a catalog:
+
+1. **Discovery:** Agents find your service by searching for a capability like `flights:search`
+2. **Evaluation:** They read your pricing, SLA, and terms
+3. **Verification:** They verify the catalog signature before trusting any of it
+4. **Commitment:** They accept the catalog version, creating a verifiable record of consent
+
+This is the foundation for agent-to-agent commerce — where one agent can autonomously discover, evaluate, and purchase services from another without human involvement.
+
+---
+
+## Publishing a Catalog
+
+### Via MCP (tell Claude)
+
+> "Publish a catalog for my Research Gate with web:search at $0.02 per call, 99.9% uptime, and 100 requests per hour per agent."
+
+Claude calls `publish_catalog` and the snapshot is signed and made discoverable.
+
+### Via API
+
+```bash
+curl -X POST https://uniplex.ai/api/gates/gate_def456/catalog \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "change_summary": "Initial catalog — web search capability",
+    "effective_at": "2026-03-01T00:00:00Z"
+  }'
+```
+
+### Via MCP Tool
+
+```json
+{
+  "gate_id": "gate_def456",
+  "change_summary": "Added hotels:search capability",
+  "effective_at": "2026-03-01T00:00:00Z"
+}
+```
+
+Returns a `catalog_version`, a `catalog_signature`, and a `catalog_hash` that consuming agents can use to verify the snapshot independently.
+
+---
+
+## Catalog Versions
+
+Every published catalog is a versioned, immutable snapshot.
+
+```bash
+# List all published versions for a gate
+curl https://uniplex.ai/api/gates/gate_def456/catalog/versions \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+```json
+{
+  "versions": [
+    {
+      "version": 3,
+      "change_summary": "Added hotels:search",
+      "published_at": "2026-03-01T00:00:00Z",
+      "signature": "Ed25519-base64...",
+      "hash": "sha256:a3f9e7c2...",
+      "status": "active"
+    },
+    {
+      "version": 2,
+      "change_summary": "Updated pricing for flights:book",
+      "published_at": "2026-02-01T00:00:00Z",
+      "status": "superseded"
+    }
+  ]
+}
+```
+
+Consuming agents that accepted version 2 are notified about version 3. If version 3 has breaking changes (pricing increases, capability removal), agents must explicitly re-accept before they can continue.
+
+---
+
+## Discovery: How Agents Find Your Service
+
+Your published catalog is discoverable via Supravisor's public discovery endpoint. No authentication required.
+
+```bash
+# Find all services that offer flights:search under $0.10 per call
+curl "https://uniplex.ai/api/discover?capability=flights:search&max_price_cents=10" 
+```
+
+```json
+{
+  "services": [
+    {
+      "gate_id": "gate_acme-travel",
+      "name": "Acme Travel API",
+      "capability": "flights:search",
+      "pricing": {
+        "base_price_cents": 2,
+        "pricing_model": "per_call"
+      },
+      "sla": {
+        "uptime_basis_points": 9990,
+        "response_time_ms_p99": 800
+      },
+      "catalog_version": 3,
+      "catalog_signature": "Ed25519-base64..."
+    }
+  ]
+}
+```
+
+The agent receives the catalog signature and verifies it locally before trusting any pricing or SLA information. No need to trust the discovery server — just the math.
+
+---
+
+## Agent Consent: Accepting a Catalog Version
+
+Before an agent can transact with your service, it formally accepts the current catalog version. This creates a cryptographic record of consent.
+
+```python
+from uniplex import UniplexClient
+
+client = UniplexClient(api_key="uni_xxxx")
+
+# Agent accepts catalog version 3
+passport = client.passports.reissue(
+    passport_id="uni_abc123",
+    accept_catalog_version=3
+)
+
+# New passport is pinned to catalog version 3
+# If terms change in version 4, the agent must re-accept before transacting
+```
+
+This isn't just a checkbox. It's a signed record that the agent read and accepted the terms at version 3. Useful when you need to prove that a consuming agent consented to your pricing before a disputed transaction.
+
+---
+
+## Catalog-Backed Billing
+
+When catalogs are combined with consumption attestations, you get tamper-proof billing:
+
+1. Consumer agent transacts with your gate
+2. Both parties sign a consumption attestation
+3. At billing time, attestations are aggregated into a settlement
+4. Settlement shows: exactly what was consumed, by whom, against which catalog version, and at what price
+
+No he-said-she-said. Just cryptographic receipts on both sides.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Anonymous Access" href="/docs/concepts/anonymous-access" icon="door-open">
+    Let agents browse your catalog without credentials.
+  </Card>
+  <Card title="Agent Autonomy" href="/docs/guides/agent-autonomy" icon="robot">
+    How agents discover, evaluate, and transact autonomously.
+  </Card>
+  <Card title="MCP Server" href="/docs/guides/mcp-server" icon="server">
+    Manage catalogs and discovery via 21 MCP tools.
+  </Card>
+</CardGroup>

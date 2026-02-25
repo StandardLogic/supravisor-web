@@ -1,0 +1,147 @@
+# Authentication
+
+Every Supravisor API request requires a Bearer token. Your API key is the token.
+
+**Base URL:** `https://uniplex.ai/api`
+
+---
+
+## API Key Format
+
+```
+uni_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+- Prefix: `uni_`
+- 64 lowercase hexadecimal characters following the prefix
+- Total length: 68 characters
+
+---
+
+## Making Authenticated Requests
+
+Include your key as a Bearer token in the `Authorization` header on every request:
+
+```bash
+curl https://uniplex.ai/api/issuers \
+  -H "Authorization: Bearer uni_xxxx"
+```
+
+```python
+import requests
+
+headers = {"Authorization": "Bearer uni_xxxx"}
+response = requests.get("https://uniplex.ai/api/issuers", headers=headers)
+```
+
+```typescript
+const response = await fetch('https://uniplex.ai/api/issuers', {
+  headers: { Authorization: 'Bearer uni_xxxx' },
+});
+```
+
+---
+
+## Creating an API Key
+
+1. Log into the dashboard at [uniplex.ai](https://uniplex.ai)
+2. Click **Settings → API Keys** in the left sidebar
+3. Click **+ New API Key**
+4. Give it a descriptive name (e.g., "Production Server", "CI/CD Pipeline")
+5. Select the scopes you need (see below)
+6. Click **Create**
+
+<Warning>
+  The key is shown **exactly once**. Copy it immediately and store it in a secrets manager — AWS Secrets Manager, 1Password, Vault, or equivalent. It cannot be retrieved again.
+</Warning>
+
+---
+
+## Scopes
+
+API keys are scoped. Grant only what your use case requires — a monitoring script shouldn't have `passports:issue`.
+
+| Scope | What it allows |
+|-------|---------------|
+| `gates:create` | Create new gates |
+| `gates:read` | List and retrieve gate configurations |
+| `gates:update` | Update gate configuration and constraints |
+| `gates:delete` | Delete gates |
+| `gates:manage` | Full gate management (create + read + update + delete) |
+| `passports:issue` | Issue new passports for agents |
+| `passports:read` | List and retrieve passport details |
+| `passports:revoke` | Revoke passports |
+| `issuers:create` | Create new issuers |
+| `issuers:read` | List and retrieve issuer details |
+| `issuers:update` | Update issuer name and description |
+| `guardrails:create` | Create guardrail configurations |
+| `guardrails:read` | Read guardrail configurations |
+| `guardrails:update` | Update guardrail configurations |
+| `templates:create` | Create custom constraint templates |
+| `templates:read` | List and apply templates |
+| `templates:update` | Update template configurations |
+| `audit:read` | Read audit trail and attestations |
+| `audit:export` | Export attestations as JSON or CSV |
+| `audit:share` | Create public share links for attestations |
+| `admin:*` | Full administrative access — use sparingly |
+
+**Recommended scope sets:**
+
+| Use Case | Scopes |
+|----------|--------|
+| Read-only monitoring | `passports:read, gates:read, audit:read` |
+| Autonomous agent (issues its own passports) | `passports:issue, passports:revoke, audit:read` |
+| Full management | `gates:manage, passports:issue, passports:read, passports:revoke, issuers:read, audit:read, audit:export` |
+| CI/CD pipeline | `passports:issue, passports:revoke, gates:read` |
+
+---
+
+## Error Responses
+
+| HTTP Status | Meaning |
+|-------------|---------|
+| `401 Unauthorized` | Missing or invalid API key |
+| `403 Forbidden` | Valid key but missing required scope |
+| `429 Too Many Requests` | Rate limit exceeded |
+
+**Error body:**
+
+```json
+{
+  "error": "Forbidden",
+  "message": "API key missing required scope: passports:issue",
+  "required_scope": "passports:issue"
+}
+```
+
+---
+
+## Rate Limits
+
+| Endpoint Group | Rate Limit |
+|----------------|-----------|
+| Read endpoints (GET) | 300 requests / minute |
+| Write endpoints (POST, PUT, DELETE) | 60 requests / minute |
+| Authorization (`POST /api/authorize`) | 1,000 requests / minute |
+| Audit trail export | 10 requests / minute |
+
+Rate limit headers are included on all responses:
+
+```
+X-RateLimit-Limit: 300
+X-RateLimit-Remaining: 287
+X-RateLimit-Reset: 1708780800
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Passports API" href="/docs/api-reference/passports" icon="id-card">
+    Issue and manage agent credentials.
+  </Card>
+  <Card title="Gates API" href="/docs/api-reference/gates" icon="shield">
+    Create and configure enforcement checkpoints.
+  </Card>
+</CardGroup>

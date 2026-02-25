@@ -1,0 +1,143 @@
+# Constraint Templates
+
+Building guardrails from scratch means configuring 26 constraint types and hoping you didn't miss anything important.
+
+Templates skip that. Thirty pre-built constraint profiles, organized by agent type, built around real-world usage patterns. Pick the one closest to your use case and you're 90% done. Adjust the remaining 10% if needed.
+
+These aren't suggestions — they're configurations that have been tested against common edge cases. The Customer Support Agent blocks payment access because support bots getting near payment systems is a well-documented failure mode. The Web Research Agent uses an allowlist instead of a blocklist because allowlisting is strictly safer. The Financial Agent requires L3 trust because the stakes justify the overhead.
+
+Start with a template. Customize if you need to. Skip the blank-page problem.
+
+---
+
+## How to Apply a Template
+
+<Steps>
+  <Step title="Open Gates">
+    Click **Gates** in the left sidebar.
+  </Step>
+  <Step title="Create or edit a gate">
+    Click **+ New Gate**, or click an existing gate → **Edit**.
+  </Step>
+  <Step title="Choose a template">
+    Click **Choose Template** in the Constraints section. Browse by category or search by name.
+  </Step>
+  <Step title="Apply and customize">
+    Click **Apply**. All constraint fields are populated. Adjust any values that don't fit your exact use case.
+  </Step>
+  <Step title="Save">
+    Click **Save Gate**. Your gate is now configured with the template's guardrails.
+  </Step>
+</Steps>
+
+**Via API:**
+
+```bash
+curl -X POST https://uniplex.ai/api/gates \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Research Gate",
+    "profile": "L2",
+    "trusted_issuers": ["issuer:mycompany.ai"],
+    "template": "web-research-agent"
+  }'
+```
+
+**Via MCP** (tell Claude):
+> "Apply the Web Research Agent template to my Research Gate."
+
+---
+
+## Template Categories
+
+<CardGroup cols={2}>
+  <Card title="Personal Productivity" href="/docs/templates/personal-productivity" icon="house">
+    **6 templates** for personal AI assistants.
+
+    Email, calendar, file organization, notes, tasks, and shopping. Conservative daily limits and sensible defaults for individual use.
+  </Card>
+  <Card title="Business Operations" href="/docs/templates/business-operations" icon="building">
+    **6 templates** for business process automation.
+
+    Customer support, sales development, contract review, HR onboarding, expense reports, and meeting scheduling. Escalation paths built in.
+  </Card>
+  <Card title="Developer Tools" href="/docs/templates/developer-tools" icon="code">
+    **6 templates** for AI-powered developer workflows.
+
+    Code review, CI/CD, documentation, bug triage, security scanning, and dependency auditing. Read-heavy with carefully scoped writes.
+  </Card>
+  <Card title="Finance & Commerce" href="/docs/templates/finance-commerce" icon="dollar-sign">
+    **6 templates** for financial AI agents.
+
+    Budget tracking, invoice processing, payment monitoring, portfolio analysis, payroll processing, and crypto trading. All built with L2+ trust, dual approval, and PII protection.
+  </Card>
+  <Card title="Research & Content" href="/docs/templates/research-content" icon="search">
+    **6 templates** for research and content creation.
+
+    Web research, content writing, social media scheduling, data analysis, market research, and competitive intelligence. Optimized for read-heavy, output-focused workflows.
+  </Card>
+</CardGroup>
+
+---
+
+## Comparing Templates Quickly
+
+| Template | Trust | Spending | Rate | Key Protection |
+|----------|-------|---------|------|----------------|
+| Web Research Agent | L2 | $20/day | 200/hr | Domain allowlist, read-only |
+| Customer Support Agent | L2 | None | 10/min | No payments, PII block |
+| Code Review Agent | L2 | None | 30/hr | No git push/merge |
+| Budget Tracker | L2 | Read-only | — | No transactions |
+| Financial Agent | L3 | $500/day + approval | — | PII block, audit required |
+| Personal Email Agent | L1/L2 | 50 sends/day | 20/hr | No bulk export |
+
+---
+
+## Customizing After Applying
+
+Templates are starting points, not requirements. After applying, you can:
+
+- **Adjust spending limits** — increase if you have a bigger budget, decrease for tighter control
+- **Modify domain lists** — add your internal APIs, remove services you don't use
+- **Change the rate limits** — based on actual usage patterns from your audit trail
+- **Switch the security level** — upgrade to L3 for higher-stakes deployments
+
+Every customization is tracked in the gate's configuration history.
+
+---
+
+## Building Your Own Template
+
+If you've dialed in a constraint configuration that works, save it as a custom template:
+
+```bash
+curl -X POST https://uniplex.ai/api/templates \
+  -H "Authorization: Bearer uni_xxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Company Research Agent",
+    "category": "research",
+    "constraints": {
+      "read_only": true,
+      "domain_allowlist": "google.com,arxiv.org,internal.mycompany.com",
+      "max_per_day": "$30.00",
+      "no_pii_export": true
+    }
+  }'
+```
+
+Custom templates appear in the dashboard alongside the built-in ones.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Custom Constraints" href="/docs/guides/custom-constraints" icon="wrench">
+    Build guardrails from scratch for unique requirements.
+  </Card>
+  <Card title="Guardrails Reference" href="/docs/concepts/guardrails" icon="sliders">
+    Full reference for all 26 constraint types.
+  </Card>
+</CardGroup>

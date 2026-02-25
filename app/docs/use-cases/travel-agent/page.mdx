@@ -1,0 +1,186 @@
+# Use Case: Travel Agent
+
+<Note>
+  **The moment:** Knowing your booking agent can't overspend, can't book without confirmation, and left a signed receipt for every decision.
+</Note>
+
+An AI travel agent needs to book flights, hotels, and ground transport across multiple third-party providers. Each provider has its own gate. The agent discovers services, negotiates terms, and makes bookings — all with cryptographic guarantees.
+
+---
+
+## The Scenario
+
+**Actors:** Travel AI Agent, Acme Airlines (gate operator), Hilton Hotels (gate operator), Agent Operator (the company running the travel agent)
+
+**Goal:** Agent books a flight + hotel for a trip, staying within a $500/day spending budget, with cryptographic proof of every transaction.
+
+---
+
+## Step 1: Service Discovery
+
+The agent queries the public discovery endpoint to find flight services:
+
+```bash
+GET /api/discover?capability=flights:*&max_price_cents=100&min_uptime_bp=9990&sort=price_asc
+```
+
+**Response (abridged):**
+```json
+{
+  "services": [
+    {
+      "gate_id": "gate_acme-travel",
+      "name": "Acme Airlines API",
+      "capability": "flights:book",
+      "pricing": { "base_price_cents": 50, "currency": "USD" },
+      "sla": { "uptime_basis_points": 9995, "max_latency_ms": 200 },
+      "catalog_content_hash": "sha256:a3f9...",
+      "catalog_signature": "base64_ed25519...",
+      "passport_required_url": "https://acme.example.com/api-access"
+    }
+  ]
+}
+```
+
+The agent **verifies the catalog signature locally** before trusting the terms. No trust in the discovery server required.
+
+---
+
+## Step 2: Passport Issuance
+
+The agent's operator issues passports pinned to each provider's current catalog:
+
+```bash
+POST /api/gates/gate_acme-travel/passports
+{
+  "issuer_id": "issuer:travelcorp.ai",
+  "agent_id": "booking-agent-01",
+  "permissions": ["flights:search", "flights:book"],
+  "expires_in": "30d",
+  "agent_public_key": "MCowBQYDK2VwAyEA...",
+  "constraints": {
+    "core:cost:max_per_action": 50000,
+    "core:cost:max_cumulative": 50000,
+    "core:cost:cumulative_window": "daily"
+  }
+}
+```
+
+The issued passport stores `catalog_content_hash = "sha256:a3f9..."` — locking the agent to Acme's current pricing forever (until the operator accepts a catalog upgrade).
+
+---
+
+## Step 3: Gate Check → Search Flights
+
+```bash
+POST /api/gates/gate_acme-travel/check
+{
+  "passport_json": { "payload": {...}, "signature": "..." },
+  "action": "flights:search",
+  "target": "JFK-LAX-2026-03-15"
+}
+```
+
+Gate verifies: signature ✅ · not expired ✅ · issuer trusted ✅ · permission in list ✅
+
+**Response:** `{ "decision": "allow", "attestation_id": "att_001" }`
+
+---
+
+## Step 4: CEL Enforce → Book Flight
+
+For the $450 booking (a billable action), the agent runs CEL enforcement:
+
+```bash
+POST /api/enforce
+{
+  "passport_id": "uni_booking-001",
+  "action": "flights:book",
+  "target": "flight:AA123",
+  "cost_cents": 45000
+}
+```
+
+CEL evaluates:
+- `core:scope:action_allowlist` → PERMIT (flights:book in allowlist)
+- `core:cost:max_per_action` → PERMIT ($450 < $500 limit)
+- `core:cost:max_cumulative` → PERMIT ($450 < $500 daily limit remaining)
+
+**Decision: PERMIT**
+
+---
+
+## Step 5: Record Consumption
+
+The agent constructs a PoP and records the billable interaction:
+
+```bash
+POST /api/consume
+{
+  "passport_id": "uni_booking-001",
+  "gate_id": "gate_acme-travel",
+  "action": "flights:book",
+  "outcome": "success",
+  "quantity": 1,
+  "agent_pop": {
+    "signature": "base64_ed25519...",
+    "timestamp": 1708780800000,
+    "nonce": "f3a2b1c9...",
+    "catalog_content_hash": "sha256:a3f9..."
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "attestation_id": "att_002",
+  "gate_signature": "base64...",
+  "cost_cents": 50,
+  "platform_fee_cents": 1,
+  "status": "recorded"
+}
+```
+
+Both the agent and Acme Airlines hold signed receipts. Neither can deny the booking occurred.
+
+---
+
+## Step 6: Monthly Settlement
+
+At month end, Acme Airlines settles the billing period:
+
+```bash
+POST /api/billing
+{
+  "gate_id": "gate_acme-travel",
+  "period_type": "monthly",
+  "period_start": "2026-03-01T00:00:00Z",
+  "period_end": "2026-04-01T00:00:00Z"
+}
+```
+
+The settlement batch-verifies all Ed25519 signatures, aggregates costs in bigint, and produces an immutable summary. Status progresses: `pending → invoiced → paid`.
+
+---
+
+## Step 7: SLA Verification
+
+The operator checks whether Acme met its SLA:
+
+```bash
+GET /api/gates/gate_acme-travel/sla?period_start=2026-03-01&period_end=2026-04-01
+```
+
+If `sla_met: false`, the operator has cryptographic proof for the dispute.
+
+---
+
+## Key Guarantees
+
+- ✅ **Trustless discovery** — catalog terms verified locally before any interaction
+- ✅ **Anti-bait-and-switch** — pricing locked at passport issuance
+- ✅ **Spending constraints** — CEL blocks overspend before it happens
+- ✅ **Bilateral receipts** — both parties hold signed proof
+- ✅ **Replay protection** — nonce ledger prevents double-billing
+- ✅ **SLA accountability** — missed SLAs generate cryptographic credits
