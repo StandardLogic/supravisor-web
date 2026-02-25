@@ -19,6 +19,7 @@ import {
   Zap,
   Users,
   ArrowLeftRight,
+  Code,
 } from 'lucide-react'
 import { LandingNav } from './landing-nav'
 import { HowItWorks } from './how-it-works'
